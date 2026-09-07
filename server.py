@@ -330,18 +330,6 @@ def api_actions():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/plugins")
-def api_plugins():
-    try:
-        from plugins.plugin_loader import PluginLoader
-        loader = PluginLoader()
-        loader.discover()
-        plugin_list = loader.list_plugins()
-        return jsonify({"plugins": plugin_list, "count": len(plugin_list)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # ── Memory API ────────────────────────────────────────────────────────────────
 
 @app.route("/api/memory")

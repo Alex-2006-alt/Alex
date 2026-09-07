@@ -15,7 +15,6 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 LOGS_DIR = DATA_DIR / "logs"
 RECORDINGS_DIR = DATA_DIR / "recordings"
-PLUGINS_DIR = BASE_DIR / "plugins"
 MEMORY_DB_PATH = DATA_DIR / "memory.db"
 
 # Create required directories
@@ -159,7 +158,7 @@ DEFAULT_APP_REGISTRY = {
     "settings": "ms-settings:",
 }
 
-# ─── Plugins ──────────────────────────────────────────────────────────────────
+# ─── Integrations (used by tools/notification_tools.py) ───────────────────────
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
@@ -171,7 +170,12 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_TO_FILE = os.getenv("LOG_TO_FILE", "true").lower() == "true"
 
 # ─── System Prompt for LLM ───────────────────────────────────────────────────
-SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a helpful personal AI assistant running on the user's Windows PC.
+#
+# DEPRECATED — kept only as documentation of the response format. Brain builds
+# its system prompt from live ToolRegistry descriptions (see
+# Brain._build_system_prompt); the action names below no longer exist as tools
+# and only resolve through ToolRegistry._find_by_alias.
+_LEGACY_SYSTEM_PROMPT = f"""You are {ASSISTANT_NAME}, a helpful personal AI assistant running on the user's Windows PC.
 You can control the PC, manage files, open apps, search the web, and more.
 
 CRITICAL RULES:

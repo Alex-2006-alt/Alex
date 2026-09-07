@@ -140,7 +140,7 @@ function bootSequence() {
         { delay: 800,  text: 'Loading Whisper STT engine...', status: 'LOADING STT' },
         { delay: 1200, text: 'Connecting to LLM provider...', status: 'CONNECTING' },
         { delay: 1800, text: 'Scanning action modules — 15 loaded.', status: 'LOADING ACTIONS' },
-        { delay: 2200, text: 'Plugin discovery — Weather ✓ Reminders ✓ Email ✓ Code Runner ✓', status: 'LOADING PLUGINS' },
+        { delay: 2200, text: 'Tool registry — web ✓ files ✓ system ✓ code ✓ data ✓ notifications ✓', status: 'LOADING TOOLS' },
         { delay: 2800, text: 'All systems nominal. ALEX is online.', status: 'STANDBY' },
     ];
 
@@ -499,22 +499,22 @@ function processCommandDemo(text) {
         {
             patterns: ['weather'],
             responses: ["Fetching weather data from OpenWeatherMap... It's currently 28°C, partly cloudy in your area."],
-            action: 'PLUGIN: weather',
+            action: 'TOOL: weather_get',
         },
         {
             patterns: ['remind', 'reminder', 'alarm'],
             responses: ["Reminder set! I'll alert you when it's time."],
-            action: 'PLUGIN: reminder',
+            action: 'TOOL: reminder_set',
         },
         {
             patterns: ['email', 'send email', 'mail'],
-            responses: ["Email plugin ready. To send, say: 'Send an email to [address] saying [message]'. Connect the backend for real email delivery."],
-            action: 'PLUGIN: email',
+            responses: ["Email is ready. To send, say: 'Send an email to [address] saying [message]'. Connect the backend for real email delivery."],
+            action: 'TOOL: email_send',
         },
         {
             patterns: ['run code', 'execute', 'python', 'javascript'],
-            responses: ["Code runner plugin ready. Connect the backend with `python main.py --server` to execute real code."],
-            action: 'PLUGIN: code_runner',
+            responses: ["Code execution is ready. Connect the backend with `python main.py --server` to run real code."],
+            action: 'TOOL: code_run',
         },
         {
             patterns: ['process', 'running', 'task manager'],
@@ -533,7 +533,7 @@ function processCommandDemo(text) {
         },
         {
             patterns: ['status', 'system', 'diagnostics'],
-            responses: ["All systems operational. CPU: 34%, RAM: 62%, Disk: 45% used. Network: Connected. LLM: Gemini 2.0 — Active. 15 action modules loaded, 4 plugins active."],
+            responses: ["All systems operational. CPU: 34%, RAM: 62%, Disk: 45% used. Network: Connected. LLM: Gemini 2.0 — Active. 34 tools registered across 6 categories."],
         },
         {
             patterns: ['who are you', 'what are you', 'introduce', 'your name'],
@@ -1033,10 +1033,12 @@ function startPolling() {
                 memChip.className = 'module-chip active';
                 memChip.title = `${statusData.memory.facts} facts stored`;
             }
-            // Update tool count in footer
+            // Update tool count in footer and HUD
             if (statusData.tools) {
                 const actionCountEl = document.getElementById('actionCount');
                 if (actionCountEl) actionCountEl.textContent = `${statusData.tools} TOOLS`;
+                const toolCountEl = document.getElementById('toolCount');
+                if (toolCountEl) toolCountEl.textContent = `${statusData.tools} LOADED`;
             }
         }
     }, 3000);

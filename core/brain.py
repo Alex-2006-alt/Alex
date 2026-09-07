@@ -40,6 +40,7 @@ class Brain:
         self._memory = None
         self._planner = None
         self._task_manager = None
+        self._context = None
         self._confirm_callback: Callable | None = None
 
         # Plan execution state
@@ -140,12 +141,19 @@ RULES:
 5. Do NOT include raw function names or http links in your conversational speech.
 """
 
-        # Inject tool descriptions if registry available
-        if self._tool_registry:
+        # Inject live tool descriptions. Without a registry there is nothing
+        # the LLM could usefully call, so say so rather than advertising the
+        # old hardcoded action names that no longer resolve to anything.
+        if self._tool_registry and len(self._tool_registry):
             tool_section = self._tool_registry.get_descriptions_for_prompt()
             base += f"\n\nAVAILABLE TOOLS:\n{tool_section}\n"
         else:
-            base += f"\n{config.SYSTEM_PROMPT}\n"
+            log.error("No tools registered — the LLM will be told it cannot act")
+            base += (
+                "\n\nAVAILABLE TOOLS: none. Your tool registry failed to load, so you "
+                "cannot control the PC right now. Tell the user that plainly if they "
+                "ask for an action, and never emit an action block.\n"
+            )
 
         return base
 
@@ -228,6 +236,11 @@ RULES:
 
         log.info(f"🤔 Think: \"{user_input[:80]}\"")
 
+        # Drop the previous plan: /api/plan and get_current_plan() would
+        # otherwise keep serving a finished plan as if it were still running.
+        with self._plan_lock:
+            self._current_plan = None
+
         # Extract facts from user input into long-term memory
         if self._memory:
             self._memory.extract_facts_from_text(user_input)
@@ -307,10 +320,17 @@ RULES:
         if self._planner is None:
             self._init_planner()
 
-        # Memory context for planning
-        memory_context = ""
+        # Memory + PC context for planning
+        context_blocks = []
+        try:
+            context_blocks.append(self._get_context().get_context_string())
+        except Exception:
+            pass
         if self._memory:
-            memory_context = self._memory.get_memory_prompt(user_input)
+            mem = self._memory.get_memory_prompt(user_input)
+            if mem:
+                context_blocks.append(mem)
+        memory_context = "\n".join(context_blocks)
 
         # Step 1: Create plan
         plan = self._planner.create_plan(
@@ -324,7 +344,8 @@ RULES:
             return self._think_fast(user_input)
 
         plan.status = "running"
-        self._current_plan = plan
+        with self._plan_lock:
+            self._current_plan = plan
         self._notify_plan("plan_started", plan.to_dict())
 
         # Step 2: Execute plan steps
@@ -585,15 +606,30 @@ RULES:
 
     # ─── HELPERS ─────────────────────────────────────────────────────────────
 
-    def _enrich_with_memory(self, user_input: str) -> str:
-        """Inject relevant long-term memory into the user message."""
-        if not self._memory:
-            return user_input
+    def _get_context(self):
+        """Lazy-initialise the PC context tracker (active window, time of day)."""
+        if self._context is None:
+            from memory.context import Context
+            self._context = Context()
+        return self._context
 
-        memory_ctx = self._memory.get_memory_prompt(user_input)
-        if memory_ctx:
-            return f"{memory_ctx}\n\nUser says: {user_input}"
-        return user_input
+    def _enrich_with_memory(self, user_input: str) -> str:
+        """Inject long-term memory and current PC context into the user message."""
+        blocks = []
+
+        try:
+            blocks.append(f"[Context] {self._get_context().get_context_string()}")
+        except Exception as e:
+            log.debug(f"Context unavailable: {e}")
+
+        if self._memory:
+            memory_ctx = self._memory.get_memory_prompt(user_input)
+            if memory_ctx:
+                blocks.append(memory_ctx)
+
+        if not blocks:
+            return user_input
+        return "\n".join(blocks) + f"\n\nUser says: {user_input}"
 
     def _parse_response(self, raw_response: str) -> dict:
         """Parse LLM response to extract action JSON from action block."""
@@ -631,7 +667,7 @@ RULES:
         return "\n".join(lines)
 
     def get_current_plan(self) -> dict | None:
-        """Return current plan as dict if one is active."""
-        if self._current_plan:
-            return self._current_plan.to_dict()
-        return None
+        """Return the plan for the request in flight, or None when idle."""
+        with self._plan_lock:
+            plan = self._current_plan
+        return plan.to_dict() if plan else None

@@ -331,6 +331,19 @@ class LongTermMemory:
             ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
+    def search_conversation(self, query: str, limit: int = 10) -> list[dict]:
+        """
+        Substring search over the conversation log, newest first.
+        Folded in from the retired memory/storage.py.
+        """
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT role, content, timestamp FROM conversation_log "
+            "WHERE content LIKE ? ORDER BY timestamp DESC LIMIT ?",
+            (f"%{query}%", limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # ─── HELPERS ─────────────────────────────────────────────────────────────
 
     def _row_to_fact(self, row: sqlite3.Row) -> Fact:
