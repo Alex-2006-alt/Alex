@@ -632,8 +632,11 @@ RULES:
                     
                     if not hasattr(response, "choices") or not response.choices:
                         raise ValueError(f"Provider returned invalid response: {response}")
-                        
-                    return response.choices[0].message.content
+                    
+                    content = response.choices[0].message.content
+                    if content is None:
+                        raise ValueError(f"Provider returned None content (model={model_name})")
+                    return content
                 except Exception as e:
                     log.warning(f"OpenRouter model {model_name} failed: {e}")
                     last_error = e
@@ -723,8 +726,11 @@ RULES:
                     
                     if not hasattr(response, "choices") or not response.choices:
                         raise ValueError(f"Provider returned invalid response: {response}")
-                        
-                    return response.choices[0].message.content
+                    
+                    content = response.choices[0].message.content
+                    if content is None:
+                        raise ValueError(f"Provider returned None content (model={model_name})")
+                    return content
                 except Exception as e:
                     log.warning(f"OpenRouter model {model_name} failed: {e}")
                     last_error = e
