@@ -1,5 +1,9 @@
 # A.L.E.X — Improvement Roadmap
 
+> New capabilities (YouTube, power, startup greeting, WhatsApp, phone calls)
+> are planned separately in [FEATURES.md](FEATURES.md). This file covers the
+> health of what already exists.
+
 Phases 0–4 of the original roadmap are complete. What follows records what
 landed and why, then lists the work that is still open.
 
