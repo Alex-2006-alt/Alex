@@ -40,6 +40,7 @@ class Brain:
         self._memory = None
         self._planner = None
         self._task_manager = None
+        self._confirm_callback: Callable | None = None
 
         # Plan execution state
         self._current_plan = None
@@ -58,6 +59,28 @@ class Brain:
 
     def set_task_manager(self, task_manager):
         self._task_manager = task_manager
+
+    def set_confirm_callback(self, callback: Callable | None):
+        """
+        Set the channel used to confirm CONFIRM-level tools during plan execution.
+        Signature: ``fn(tool_name: str, params: dict) -> bool``.
+        """
+        self._confirm_callback = callback
+
+    def _step_confirm_callback(self) -> Callable | None:
+        """
+        Resolve the confirmation channel for an agentic step.
+
+        Without one, CONFIRM-level tools are denied by ToolRegistry — which is
+        the safe outcome. AGENT_AUTO_CONFIRM is the explicit opt-out.
+        """
+        if self._confirm_callback is not None:
+            return self._confirm_callback
+        if config.AGENT_AUTO_CONFIRM:
+            from core.tool_registry import ToolRegistry
+            log.warning("⚠️ AGENT_AUTO_CONFIRM is on — plan steps run dangerous tools unattended")
+            return ToolRegistry.AUTO_APPROVE
+        return None
 
     def add_plan_listener(self, callback: Callable):
         self._plan_listeners.append(callback)
@@ -398,7 +421,7 @@ RULES:
                 result = self._tool_registry.execute(
                     step.action,
                     step.params,
-                    confirm_callback=None,  # In agentic mode, auto-confirm safe tools
+                    confirm_callback=self._step_confirm_callback(),
                 )
                 step.result = result.to_response() if hasattr(result, 'to_response') else str(result)
                 step.status = StepStatus.DONE if (not hasattr(result, 'success') or result.success) else StepStatus.FAILED

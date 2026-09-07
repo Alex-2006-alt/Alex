@@ -6,6 +6,7 @@ Integrates: ToolRegistry, LongTermMemory, TaskManager, SystemMonitor
 
 import time
 import sys
+import threading
 
 from utils.logger import log
 import config
@@ -35,10 +36,21 @@ class Assistant:
     - Planner: multi-step ReAct agentic loop
     """
 
+    VALID_INPUT_MODES = ("voice", "text", "api")
+
     def __init__(self, use_wake_word: bool = True, input_mode: str = "voice"):
+        if input_mode not in self.VALID_INPUT_MODES:
+            raise ValueError(
+                f"input_mode must be one of {self.VALID_INPUT_MODES}, got {input_mode!r}"
+            )
+
         self.use_wake_word = use_wake_word
-        self.input_mode = input_mode  # "voice" or "text"
+        self.input_mode = input_mode  # "voice", "text", or "api" (web server)
         self._running = False
+
+        # Brain state (chat session, history, current plan) is shared, so only
+        # one request may be in flight at a time. See process_text_full().
+        self._request_lock = threading.RLock()
 
         log.info("=" * 60)
         log.info(f"  🤖 Initializing {config.ASSISTANT_NAME} (Upgraded)...")
@@ -63,6 +75,11 @@ class Assistant:
         self.brain.set_tool_registry(self._tool_registry)
         self.brain.set_memory(self._memory)
         self.brain.set_task_manager(self._task_manager)
+
+        # Confirmation channel for CONFIRM-level tools inside multi-step plans.
+        # In "api" mode this stays None until a request supplies one, so a plan
+        # can never run a dangerous tool without the web UI approving it.
+        self.brain.set_confirm_callback(self._interactive_confirm)
 
         # Wake word
         if self.use_wake_word:
@@ -204,7 +221,11 @@ class Assistant:
             return
 
         # Step 3: Special commands check
-        if self._handle_special_commands(user_input):
+        special = self._handle_special_commands(user_input)
+        if special is not None:
+            # shutdown() already spoke its farewell and exited; anything that
+            # returns here still needs saying.
+            self.speaker.say(special)
             return
 
         # Step 4: Try command dispatcher first (fast path)
@@ -232,7 +253,7 @@ class Assistant:
                 tool_result = self._tool_registry.execute(
                     result["action"],
                     result.get("params") or {},
-                    confirm_callback=self._voice_confirm_tool,
+                    confirm_callback=self._interactive_confirm,
                 )
                 action_response = tool_result.to_response()
             else:
@@ -246,41 +267,74 @@ class Assistant:
         if result.get("response"):
             self.speaker.say(result["response"])
 
-    def _voice_confirm(self, action: str, params: dict) -> bool:
-        """Ask user for voice confirmation of dangerous actions (legacy)."""
-        self.speaker.say(
-            f"Warning: you're asking me to {action}. "
-            f"This could be dangerous. Should I proceed? Say yes or no."
+    # ─── CONFIRMATION ─────────────────────────────────────────────────────────
+
+    AFFIRMATIVE = ("yes", "yeah", "yep", "sure", "go ahead", "do it", "confirm", "proceed", "ok", "okay")
+
+    def _interactive_confirm(self, tool_name: str, params: dict) -> bool:
+        """
+        Ask the user to approve a CONFIRM-level tool, via whichever channel
+        this Assistant was constructed for.
+
+        Returns None-safe bool. In "api" mode there is no interactive channel,
+        so this returns False — the server supplies its own per-request
+        callback instead (see process_text_full).
+        """
+        prompt = (
+            f"Warning: this will run '{tool_name}' with {params}. "
+            f"This could be dangerous. Should I proceed?"
         )
-        response = self.listener.listen()
-        if response:
-            response_lower = response.lower()
-            if any(w in response_lower for w in ["yes", "yeah", "sure", "go ahead", "do it", "confirm"]):
-                log.info("✅ User confirmed dangerous action")
-                return True
-        log.info("🚫 User denied dangerous action")
-        self.speaker.say("Okay, I cancelled that action.")
+
+        if self.input_mode == "voice":
+            self.speaker.say(prompt + " Say yes or no.")
+            response = self.listener.listen()
+        elif self.input_mode == "text":
+            print(f"\n  ⚠️ {prompt}")
+            try:
+                response = input("  Proceed? (yes/no): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                response = None
+        else:  # "api" — no interactive channel available
+            log.warning(f"🚫 Denied '{tool_name}': no interactive confirmation channel in api mode")
+            return False
+
+        if response and any(w in response.lower() for w in self.AFFIRMATIVE):
+            log.info(f"✅ User confirmed dangerous action: {tool_name}")
+            return True
+
+        log.info(f"🚫 User denied dangerous action: {tool_name}")
+        if self.input_mode == "voice":
+            self.speaker.say("Okay, I cancelled that action.")
+        else:
+            print("  Cancelled.")
         return False
 
-    def _voice_confirm_tool(self, tool_name: str, params: dict) -> bool:
-        """Voice confirmation for CONFIRM-safety-level tools."""
-        return self._voice_confirm(tool_name, params)
+    def _handle_special_commands(self, text: str) -> str | None:
+        """
+        Handle built-in commands that don't need the LLM.
 
-    def _handle_special_commands(self, text: str) -> bool:
-        """Handle built-in commands that don't need the LLM."""
+        Returns the response text if the command was handled, or None to let
+        the caller fall through to the dispatcher and the LLM. The caller
+        decides how to deliver the response (speak it, or return it over HTTP)
+        — this method must not speak, or web users hear the answer on the
+        server's speakers instead of reading it.
+        """
         text_lower = text.lower().strip()
 
         # Exit
         if text_lower in ["quit", "exit", "stop", "goodbye", "bye", "shut down alex"]:
+            if self.input_mode == "api":
+                # Never tear down the shared assistant from inside a web request:
+                # shutdown() closes the memory DB that later requests still need.
+                return "Goodbye! I'm still here whenever you need me."
             self.speaker.say("Goodbye! Have a great day!")
             self.shutdown()
-            return True
+            return "Goodbye! Have a great day!"
 
         # Clear history
         if text_lower in ["clear history", "forget everything", "reset"]:
             self.brain.clear_history()
-            self.speaker.say("I've cleared my conversation history. Starting fresh!")
-            return True
+            return "I've cleared my conversation history. Starting fresh!"
 
         # Clear memory
         if "forget what you know about me" in text_lower or "clear my memory" in text_lower:
@@ -288,88 +342,106 @@ class Assistant:
                 facts = self._memory.get_all_facts()
                 for f in facts:
                     self._memory.forget(f.key)
-            self.speaker.say("I've cleared all stored information about you.")
-            return True
+            return "I've cleared all stored information about you."
 
         # Cancel shutdown
         if "cancel shutdown" in text_lower or "abort shutdown" in text_lower:
             import os
             os.system("shutdown /a")
-            self.speaker.say("Shutdown cancelled.")
-            return True
+            return "Shutdown cancelled."
 
         # System status
         if text_lower in ["status", "system status", "how is the system"]:
             from utils.system_info import get_system_summary, format_system_info_for_speech
             info = get_system_summary()
-            self.speaker.say(format_system_info_for_speech(info))
-            return True
+            return format_system_info_for_speech(info)
 
         # Task status
         if "what tasks" in text_lower or "running tasks" in text_lower or "background tasks" in text_lower:
             if self._task_manager:
-                summary = self._task_manager.get_summary()
-                self.speaker.say(summary)
-            else:
-                self.speaker.say("Task manager is not available.")
-            return True
+                return self._task_manager.get_summary()
+            return "Task manager is not available."
 
         # Cancel all tasks
         if "cancel all tasks" in text_lower or "stop all tasks" in text_lower:
             if self._task_manager:
                 self._task_manager.cancel_all()
-                self.speaker.say("All background tasks cancelled.")
-            return True
+                return "All background tasks cancelled."
+            return "Task manager is not available."
 
         # Memory summary
         if "what do you know about me" in text_lower or "my profile" in text_lower:
-            if self._memory:
-                profile = self._memory.get_user_profile()
-                if profile:
-                    facts_text = ", ".join(f"{k.replace('_', ' ')}: {v}" for k, v in profile.items())
-                    self.speaker.say(f"Here's what I know about you: {facts_text}")
+            if not self._memory:
+                return "My long-term memory isn't available right now."
+            profile = self._memory.get_user_profile()
+            if profile:
+                facts_text = ", ".join(f"{k.replace('_', ' ')}: {v}" for k, v in profile.items())
+                return f"Here's what I know about you: {facts_text}"
+            return "I don't have any stored information about you yet."
+
+        return None
+
+    def process_text_full(self, text: str, confirm_callback=None) -> dict:
+        """
+        Process a text command and return rich execution metadata.
+
+        Args:
+            text: The user's message.
+            confirm_callback: ``fn(tool_name, params) -> bool`` used to approve
+                CONFIRM-level tools for this request. Omit it and those tools
+                are denied — there is no implicit approval.
+
+        Serialised on ``self._request_lock``: Brain's chat session, history and
+        current plan are shared mutable state, so concurrent calls would
+        interleave. Callers are expected to be short-lived request threads.
+        """
+        with self._request_lock:
+            log.info(f"📝 Processing text: \"{text}\"")
+
+            special = self._handle_special_commands(text)
+            if special is not None:
+                return {"response": special, "action": "built_in", "params": {}}
+
+            # Try command dispatcher first (fast path)
+            dispatched = self.dispatcher.dispatch(text)
+            if dispatched is not None:
+                return {"response": dispatched, "action": "dispatcher", "params": {}}
+
+            # Plans created during this request use the caller's channel too
+            previous_cb = self.brain._confirm_callback
+            self.brain.set_confirm_callback(confirm_callback)
+            try:
+                result = self.brain.think(text)
+            finally:
+                self.brain.set_confirm_callback(previous_cb)
+
+            action_response = None
+
+            if result.get("action"):
+                if self._tool_registry:
+                    tool_result = self._tool_registry.execute(
+                        result["action"],
+                        result.get("params") or {},
+                        confirm_callback=confirm_callback,
+                    )
+                    action_response = tool_result.to_response()
                 else:
-                    self.speaker.say("I don't have any stored information about you yet.")
-            return True
+                    action_response = "Error: ToolRegistry is not initialized."
+                # Only use technical action_response as fallback if LLM gave no conversational response
+                if not result.get("response") or not result["response"].strip():
+                    result["response"] = action_response
 
-        return False
+            return {
+                "response": result.get("response", ""),
+                "action": result.get("action"),
+                "params": result.get("params"),
+                "action_result": action_response,
+                "plan": self.brain.get_current_plan(),
+            }
 
-    def process_text_full(self, text: str) -> dict:
-        """Process a text command and return rich execution metadata."""
-        log.info(f"📝 Processing text: \"{text}\"")
-
-        if self._handle_special_commands(text):
-            return {"response": "Special command handled.", "action": "built_in", "params": {}}
-
-        # Try command dispatcher first (fast path)
-        dispatched = self.dispatcher.dispatch(text)
-        if dispatched is not None:
-            return {"response": dispatched, "action": "dispatcher", "params": {}}
-
-        result = self.brain.think(text)
-        action_response = None
-
-        if result.get("action"):
-            if self._tool_registry:
-                tool_result = self._tool_registry.execute(result["action"], result.get("params") or {})
-                action_response = tool_result.to_response()
-            else:
-                action_response = "Error: ToolRegistry is not initialized."
-            # Only use technical action_response as fallback if LLM gave no conversational response
-            if not result.get("response") or not result["response"].strip():
-                result["response"] = action_response
-
-        return {
-            "response": result.get("response", ""),
-            "action": result.get("action"),
-            "params": result.get("params"),
-            "action_result": action_response,
-            "plan": self.brain.get_current_plan(),
-        }
-
-    def process_text(self, text: str) -> str:
+    def process_text(self, text: str, confirm_callback=None) -> str:
         """Process a text command (returns string response)."""
-        res = self.process_text_full(text)
+        res = self.process_text_full(text, confirm_callback=confirm_callback)
         return res.get("response", "")
 
     def get_status(self) -> dict:

@@ -16,6 +16,21 @@ from utils.logger import log
 import config
 
 
+def _denied_pattern(command: str) -> str | None:
+    """
+    Return the deny-list entry this command matches, or None.
+
+    These are commands confirmation should not be able to authorise — a
+    mistyped approval shouldn't be able to wipe the disk. Normalised on
+    whitespace so `del  /f /s /q  C:\\` matches too.
+    """
+    normalised = " ".join(command.lower().split())
+    for pattern in config.SHELL_DENY_PATTERNS:
+        if " ".join(pattern.lower().split()) in normalised:
+            return pattern
+    return None
+
+
 @tool(
     name="code_run",
     description="Execute Python code and return stdout/stderr output. Use for calculations, data processing, and automation scripts.",
@@ -97,6 +112,15 @@ def shell_run(params: dict) -> ToolResult:
 
     if not command:
         return ToolResult(success=False, error="No command provided")
+
+    blocked = _denied_pattern(command)
+    if blocked:
+        log.error(f"⛔ Refused shell command matching deny-list ({blocked!r}): {command}")
+        return ToolResult(
+            success=False,
+            message="I won't run that — it matches a command pattern that's blocked for safety.",
+            error=f"Command matches SHELL_DENY_PATTERNS entry {blocked!r}",
+        )
 
     log.warning(f"🖥️ Running shell command ({shell_type}): {command}")
 

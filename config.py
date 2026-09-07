@@ -107,6 +107,31 @@ DANGEROUS_ACTIONS = [
     "run_command",
 ]
 
+# ─── Safety ───────────────────────────────────────────────────────────────────
+# CONFIRM-level tools (shell_run, system_power, file_delete, process_kill,
+# code_run) are denied unless the caller supplies a confirmation channel.
+# Set this true to let multi-step plans run them unattended. Leave it false.
+AGENT_AUTO_CONFIRM = os.getenv("AGENT_AUTO_CONFIRM", "false").lower() == "true"
+
+# Seconds a pending web-UI confirmation stays valid before it expires
+CONFIRMATION_TIMEOUT = int(os.getenv("CONFIRMATION_TIMEOUT", "120"))
+
+# Substrings that are never allowed in a shell_run command, checked
+# case-insensitively before execution. Confirmation is not enough for these.
+SHELL_DENY_PATTERNS = [
+    "format ",
+    "diskpart",
+    "reg delete",
+    "vssadmin delete",
+    "bcdedit",
+    "cipher /w",
+    "del /f /s /q c:\\",
+    "rd /s /q c:\\",
+    "remove-item -recurse -force c:\\",
+    "mkfs",
+    "rm -rf /",
+]
+
 # Allowed directories for file operations (empty = all, USE WITH CAUTION)
 ALLOWED_FILE_PATHS = [
     str(Path.home()),          # User home directory

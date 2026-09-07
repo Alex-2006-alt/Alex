@@ -67,12 +67,21 @@ class ToolSpec:
         )
 
 
+def _auto_approve(_name: str, _params: dict) -> bool:
+    """Explicit opt-in for unattended execution of CONFIRM-level tools."""
+    return True
+
+
 class ToolRegistry:
     """
     Central registry for all Alex tools.
     Tools register themselves via the @tool decorator.
     """
     _instance: "ToolRegistry | None" = None
+
+    #: Pass as ``confirm_callback`` to run CONFIRM-level tools without asking.
+    #: Deliberately verbose at the call site — this is the dangerous option.
+    AUTO_APPROVE = staticmethod(_auto_approve)
 
     def __init__(self):
         self._tools: dict[str, ToolSpec] = {}
@@ -98,7 +107,11 @@ class ToolRegistry:
         Args:
             name: Tool name
             params: Parameters dict
-            confirm_callback: Called for CONFIRM-level tools; returns bool
+            confirm_callback: Called for CONFIRM-level tools; returns bool.
+                A CONFIRM-level tool is **denied** when this is None — a caller
+                with no way to ask the user has no way to approve either.
+                Callers that genuinely want unattended execution must opt in
+                explicitly by passing ``ToolRegistry.AUTO_APPROVE``.
         """
         spec = self._tools.get(name)
         if not spec:
@@ -112,9 +125,16 @@ class ToolRegistry:
                 error=f"Unknown tool '{name}'. Available: {available}"
             )
 
-        # Safety check
+        # Safety check — deny by default when there is no confirmation channel
         if spec.safety == SafetyLevel.CONFIRM:
-            if confirm_callback and not confirm_callback(name, params):
+            if confirm_callback is None:
+                log.warning(f"🚫 Blocked '{name}': requires confirmation, no confirmation channel available")
+                return ToolResult(
+                    success=False,
+                    message=f"'{name}' needs your confirmation, and I had no way to ask.",
+                    error="Confirmation required but no confirm_callback was provided",
+                )
+            if not confirm_callback(name, params):
                 return ToolResult(
                     success=False,
                     message=f"Action '{name}' was cancelled by user.",

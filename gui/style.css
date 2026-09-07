@@ -816,6 +816,77 @@ body {
     background: rgba(255, 51, 85, 0.04);
 }
 
+/* ── Confirmation cards (dangerous tool approval) ── */
+.confirm-msg {
+    border-left-color: var(--warning);
+    background: rgba(255, 107, 53, 0.06);
+    box-shadow: 0 0 14px rgba(255, 107, 53, 0.12);
+}
+
+.confirm-msg .msg-sender {
+    color: var(--warning);
+    text-shadow: 0 0 8px var(--warning-glow);
+}
+
+.confirm-params {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.75);
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 107, 53, 0.25);
+    border-radius: 3px;
+    padding: 6px 8px;
+    margin: 6px 0 0;
+    max-height: 160px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.confirm-btn {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding: 5px 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    background: transparent;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.confirm-btn.confirm-approve {
+    color: var(--warning);
+    border: 1px solid var(--warning);
+}
+
+.confirm-btn.confirm-approve:hover {
+    background: rgba(255, 107, 53, 0.15);
+    box-shadow: 0 0 10px var(--warning-glow);
+}
+
+.confirm-btn.confirm-deny {
+    color: rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.confirm-btn.confirm-deny:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.confirm-result {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+    opacity: 0.55;
+}
+
 .msg-header {
     display: flex;
     justify-content: space-between;

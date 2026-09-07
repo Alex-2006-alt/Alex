@@ -311,6 +311,75 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ============ CONFIRMATION CARDS ============
+// Dangerous tools (shell_run, system_power, file_delete, process_kill,
+// code_run) never run from the web UI without an explicit approval. The
+// backend parks the request and we poll /api/confirmations for it.
+const _confirmCards = new Map();   // confirmation_id -> card element
+
+function renderConfirmation(item) {
+    if (_confirmCards.has(item.id)) return;
+
+    const card = document.createElement('div');
+    card.className = 'message confirm-msg';
+    card.dataset.confirmId = item.id;
+    card.innerHTML = `
+        <div class="msg-header">
+            <span class="msg-sender">⚠ CONFIRMATION REQUIRED</span>
+            <span class="msg-time" data-countdown>${item.expires_in}s</span>
+        </div>
+        <div class="msg-body">
+            A.L.E.X wants to run <strong>${escapeHtml(item.tool)}</strong>
+            <pre class="confirm-params">${escapeHtml(JSON.stringify(item.params, null, 2))}</pre>
+        </div>
+        <div class="confirm-actions">
+            <button class="confirm-btn confirm-deny">DENY</button>
+            <button class="confirm-btn confirm-approve">APPROVE</button>
+        </div>
+    `;
+
+    card.querySelector('.confirm-approve').addEventListener('click', () => answerConfirmation(item.id, true));
+    card.querySelector('.confirm-deny').addEventListener('click', () => answerConfirmation(item.id, false));
+
+    dom.chatMessages.appendChild(card);
+    dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    _confirmCards.set(item.id, card);
+}
+
+function settleConfirmation(id, label) {
+    const card = _confirmCards.get(id);
+    if (card) {
+        const actions = card.querySelector('.confirm-actions');
+        if (actions) actions.innerHTML = `<span class="confirm-result">${label}</span>`;
+    }
+    _confirmCards.delete(id);
+}
+
+async function answerConfirmation(id, approved) {
+    settleConfirmation(id, approved ? 'APPROVED' : 'DENIED');
+    await apiCall('/api/confirm', 'POST', { confirmation_id: id, approved });
+}
+
+async function pollConfirmations() {
+    if (!state.backendConnected) return;
+
+    const data = await apiCall('/api/confirmations');
+    if (!data || !Array.isArray(data.pending)) return;
+
+    const live = new Set();
+    for (const item of data.pending) {
+        live.add(item.id);
+        renderConfirmation(item);
+        const countdown = _confirmCards.get(item.id)?.querySelector('[data-countdown]');
+        if (countdown) countdown.textContent = `${item.expires_in}s`;
+    }
+
+    // Anything the server dropped timed out on its own
+    for (const id of [..._confirmCards.keys()]) {
+        if (!live.has(id)) settleConfirmation(id, 'EXPIRED');
+    }
+}
+
 // ============ COMMAND HANDLING ============
 function handleSend() {
     const text = dom.chatInput.value.trim();
@@ -936,6 +1005,10 @@ function refreshSideContent() {
 
 // ============ POLLING (when backend connected) ============
 function startPolling() {
+    // Confirmations are blocking a request while they sit unanswered, so
+    // they get their own faster loop.
+    setInterval(pollConfirmations, 1500);
+
     // Poll tasks and plan every 3 seconds
     setInterval(async () => {
         if (!state.backendConnected) return;

@@ -10,6 +10,7 @@ Usage:
 import sys
 import threading
 import time
+import uuid
 import argparse
 from pathlib import Path
 
@@ -29,6 +30,10 @@ CORS(app)
 _assistant = None
 _boot_status = {"stage": "starting", "steps": [], "ready": False}
 
+# Seconds to wait on a chat request before calling it slow. Extended
+# automatically while the user has an unanswered confirmation card.
+CHAT_TIMEOUT = 60
+
 
 def _get_assistant():
     global _assistant
@@ -36,11 +41,76 @@ def _get_assistant():
         from core.assistant import Assistant
         _boot_status["stage"] = "loading"
         _boot_status["steps"].append("Loading ALEX assistant...")
-        _assistant = Assistant(use_wake_word=False)
+        _assistant = Assistant(use_wake_word=False, input_mode="api")
         _boot_status["stage"] = "ready"
         _boot_status["ready"] = True
         _boot_status["steps"].append("All systems nominal. ALEX is online.")
     return _assistant
+
+
+# ── Pending confirmations ─────────────────────────────────────────────────────
+#
+# CONFIRM-level tools (shell_run, system_power, file_delete, process_kill,
+# code_run) are denied by ToolRegistry unless the caller can ask the user. HTTP
+# has no way to ask mid-request, so a request that hits one parks a pending
+# confirmation here and blocks on its Event. The browser polls
+# GET /api/confirmations, shows an approve/deny card, and POSTs /api/confirm,
+# which sets the Event and lets the original request continue.
+
+_pending: dict[str, dict] = {}
+_pending_lock = threading.Lock()
+
+
+def _expire_stale():
+    """Drop confirmations nobody answered in time."""
+    now = time.time()
+    with _pending_lock:
+        for cid, entry in list(_pending.items()):
+            if now - entry["created"] > config.CONFIRMATION_TIMEOUT:
+                entry["approved"] = False
+                entry["event"].set()
+                _pending.pop(cid, None)
+
+
+def _request_confirmation(tool_name: str, params: dict) -> bool:
+    """
+    Park a confirmation request and block until the browser answers it.
+
+    Used as the ``confirm_callback`` for web requests. Returns False on
+    timeout — an unanswered prompt is a denial, never an approval.
+    """
+    _expire_stale()
+
+    cid = uuid.uuid4().hex[:12]
+    entry = {
+        "id": cid,
+        "tool": tool_name,
+        "params": params,
+        "created": time.time(),
+        "event": threading.Event(),
+        "approved": False,
+    }
+    with _pending_lock:
+        _pending[cid] = entry
+
+    log.warning(f"⏸️ Awaiting confirmation for '{tool_name}' (id={cid})")
+
+    answered = entry["event"].wait(timeout=config.CONFIRMATION_TIMEOUT)
+    with _pending_lock:
+        _pending.pop(cid, None)
+
+    if not answered:
+        log.warning(f"⌛ Confirmation for '{tool_name}' timed out — denying")
+        return False
+
+    log.info(f"{'✅ Approved' if entry['approved'] else '🚫 Denied'}: {tool_name} (id={cid})")
+    return bool(entry["approved"])
+
+
+def _has_pending() -> bool:
+    _expire_stale()
+    with _pending_lock:
+        return bool(_pending)
 
 
 # ── System Stats ──────────────────────────────────────────────────────────────
@@ -145,17 +215,24 @@ def api_chat():
     def _process():
         try:
             assistant = _get_assistant()
-            res = assistant.process_text_full(message)
+            res = assistant.process_text_full(message, confirm_callback=_request_confirmation)
             result_holder["full_res"] = res
         except Exception as e:
             result_holder["error"] = str(e)
 
     worker = threading.Thread(target=_process, daemon=True)
     worker.start()
-    worker.join(timeout=60)
+    worker.join(timeout=CHAT_TIMEOUT)
+
+    # Don't call a request slow when it's actually waiting on the user: keep
+    # extending while a confirmation card is still on screen unanswered.
+    waited = CHAT_TIMEOUT
+    while worker.is_alive() and _has_pending() and waited < CHAT_TIMEOUT + config.CONFIRMATION_TIMEOUT:
+        worker.join(timeout=5)
+        waited += 5
 
     if worker.is_alive():
-        log.error(f"Chat request timed out after 60s: \"{message}\"")
+        log.error(f"Chat request timed out after {waited}s: \"{message}\"")
         return jsonify({
             "error": "Request timed out",
             "response": "Sorry, that request took too long. Please try again with a simpler request.",
@@ -179,6 +256,43 @@ def api_chat():
     })
 
 
+@app.route("/api/confirmations")
+def api_confirmations_list():
+    """Confirmations waiting on the user. The GUI polls this."""
+    _expire_stale()
+    with _pending_lock:
+        pending = [
+            {
+                "id": e["id"],
+                "tool": e["tool"],
+                "params": e["params"],
+                "expires_in": max(0, round(config.CONFIRMATION_TIMEOUT - (time.time() - e["created"]))),
+            }
+            for e in _pending.values()
+        ]
+    return jsonify({"pending": pending, "count": len(pending)})
+
+
+@app.route("/api/confirm", methods=["POST"])
+def api_confirm():
+    """Approve or deny a pending confirmation, unblocking its request."""
+    data = request.get_json() or {}
+    cid = data.get("confirmation_id")
+    if not cid:
+        return jsonify({"error": "confirmation_id required"}), 400
+
+    approved = bool(data.get("approved", False))
+
+    with _pending_lock:
+        entry = _pending.get(cid)
+        if entry is None:
+            return jsonify({"error": "Unknown or expired confirmation", "confirmation_id": cid}), 404
+        entry["approved"] = approved
+        entry["event"].set()
+
+    return jsonify({"confirmation_id": cid, "approved": approved})
+
+
 @app.route("/api/action", methods=["POST"])
 def api_action():
     data = request.get_json()
@@ -191,11 +305,13 @@ def api_action():
 
     try:
         assistant = _get_assistant()
-        if hasattr(assistant, "_tool_registry") and assistant._tool_registry:
-            result = assistant._tool_registry.execute(action, params)
-            return jsonify({"result": result.to_response(), "success": result.success, "action": action})
-        result = assistant.router.execute(action, params)
-        return jsonify({"result": result, "action": action})
+        if not assistant._tool_registry:
+            return jsonify({"error": "ToolRegistry is not initialized"}), 503
+        # Same gate as chat: a CONFIRM-level tool asks the browser first.
+        result = assistant._tool_registry.execute(
+            action, params, confirm_callback=_request_confirmation
+        )
+        return jsonify({"result": result.to_response(), "success": result.success, "action": action})
     except Exception as e:
         log.error(f"Action error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -205,12 +321,11 @@ def api_action():
 def api_actions():
     try:
         assistant = _get_assistant()
-        if hasattr(assistant, "_tool_registry") and assistant._tool_registry:
-            tools = assistant._tool_registry.list_tools()
-            by_cat = assistant._tool_registry.list_by_category()
-            return jsonify({"tools": tools, "count": len(tools), "by_category": by_cat})
-        actions = assistant.router.get_available_actions()
-        return jsonify({"actions": actions, "count": len(actions)})
+        if not assistant._tool_registry:
+            return jsonify({"error": "ToolRegistry is not initialized"}), 503
+        tools = assistant._tool_registry.list_tools()
+        by_cat = assistant._tool_registry.list_by_category()
+        return jsonify({"tools": tools, "count": len(tools), "by_category": by_cat})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
