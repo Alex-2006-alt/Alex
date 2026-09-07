@@ -153,6 +153,42 @@ class TestConfirmationGate:
         reg.register(_spec("warn", lambda p: "fine", safety=SafetyLevel.WARN))
         assert reg.execute("warn", {}).success is True
 
+    def test_precheck_rejects_before_the_user_is_asked(self):
+        """A command that will be refused anyway must not park a confirmation."""
+        asked = []
+        reg = ToolRegistry()
+        spec = _spec("danger", self._dangerous, safety=SafetyLevel.CONFIRM)
+        spec.precheck = lambda params: ToolResult(success=False, error="nope") if params.get("bad") else None
+        reg.register(spec)
+
+        result = reg.execute("danger", {"bad": True}, confirm_callback=lambda n, p: asked.append(n) or True)
+
+        assert result.success is False
+        assert asked == [], "the user was asked to approve a hard-rejected call"
+        assert self.calls == []
+
+    def test_precheck_passing_falls_through_to_confirmation(self):
+        reg = ToolRegistry()
+        spec = _spec("danger", self._dangerous, safety=SafetyLevel.CONFIRM)
+        spec.precheck = lambda params: None
+        reg.register(spec)
+
+        assert reg.execute("danger", {}, confirm_callback=lambda n, p: True).success is True
+        assert len(self.calls) == 1
+
+    def test_shell_run_denylist_runs_as_a_precheck(self):
+        import tools  # noqa: F401
+
+        reg = ToolRegistry.get_instance()
+        asked = []
+        result = reg.execute(
+            "shell_run",
+            {"command": "diskpart /s wipe.txt"},
+            confirm_callback=lambda n, p: asked.append(n) or True,
+        )
+        assert result.success is False
+        assert asked == [], "a deny-listed command still prompted for approval"
+
     def test_real_dangerous_tools_are_confirm_level(self):
         """The five tools the gate is there to protect."""
         import tools  # noqa: F401 — registers everything

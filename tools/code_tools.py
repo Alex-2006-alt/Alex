@@ -31,6 +31,24 @@ def _denied_pattern(command: str) -> str | None:
     return None
 
 
+def _shell_precheck(params: dict) -> ToolResult | None:
+    """
+    Reject deny-listed commands before the user is asked to approve them.
+    Registered as shell_run's precheck; also enforced inside shell_run itself
+    so a direct call cannot skip it.
+    """
+    blocked = _denied_pattern(params.get("command", ""))
+    if not blocked:
+        return None
+
+    log.error(f"⛔ Refused shell command matching deny-list ({blocked!r}): {params.get('command')}")
+    return ToolResult(
+        success=False,
+        message="I won't run that — it matches a command pattern that's blocked for safety.",
+        error=f"Command matches SHELL_DENY_PATTERNS entry {blocked!r}",
+    )
+
+
 @tool(
     name="code_run",
     description="Execute Python code and return stdout/stderr output. Use for calculations, data processing, and automation scripts.",
@@ -104,6 +122,7 @@ def code_run(params: dict) -> ToolResult:
     },
     category="code",
     safety=SafetyLevel.CONFIRM,
+    precheck=_shell_precheck,
 )
 def shell_run(params: dict) -> ToolResult:
     command = params.get("command", "")
@@ -113,14 +132,11 @@ def shell_run(params: dict) -> ToolResult:
     if not command:
         return ToolResult(success=False, error="No command provided")
 
-    blocked = _denied_pattern(command)
-    if blocked:
-        log.error(f"⛔ Refused shell command matching deny-list ({blocked!r}): {command}")
-        return ToolResult(
-            success=False,
-            message="I won't run that — it matches a command pattern that's blocked for safety.",
-            error=f"Command matches SHELL_DENY_PATTERNS entry {blocked!r}",
-        )
+    # Belt and braces: the registry runs this as a precheck, but a direct call
+    # must not be able to skip it.
+    objection = _shell_precheck(params)
+    if objection is not None:
+        return objection
 
     log.warning(f"🖥️ Running shell command ({shell_type}): {command}")
 

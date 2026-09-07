@@ -49,6 +49,11 @@ class ToolSpec:
     safety: SafetyLevel = SafetyLevel.SAFE
     category: str = "general"
     examples: list[str] = field(default_factory=list)
+    #: Optional ``fn(params) -> ToolResult | None`` run BEFORE the confirmation
+    #: gate. Return a ToolResult to reject the call outright — used for inputs
+    #: no approval should be able to authorise, so the user is never asked to
+    #: approve something that will be refused anyway.
+    precheck: Callable | None = None
 
     def prompt_description(self) -> str:
         """Format tool for inclusion in an LLM prompt."""
@@ -124,6 +129,13 @@ class ToolRegistry:
                 success=False,
                 error=f"Unknown tool '{name}'. Available: {available}"
             )
+
+        # Hard rejections come first: no point asking the user to approve
+        # something that is refused regardless of the answer.
+        if spec.precheck:
+            objection = spec.precheck(params)
+            if objection is not None:
+                return objection
 
         # Safety check — deny by default when there is no confirmation channel
         if spec.safety == SafetyLevel.CONFIRM:
@@ -244,6 +256,7 @@ def tool(
     safety: SafetyLevel = SafetyLevel.SAFE,
     category: str = "general",
     examples: list[str] | None = None,
+    precheck: Callable | None = None,
 ):
     """
     Decorator to register a function as an Alex tool.
@@ -270,6 +283,7 @@ def tool(
             safety=safety,
             category=category,
             examples=examples or [],
+            precheck=precheck,
         )
         ToolRegistry.get_instance().register(spec)
         return fn
