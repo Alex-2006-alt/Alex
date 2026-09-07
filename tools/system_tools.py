@@ -29,13 +29,36 @@ def app_open(params: dict) -> ToolResult:
     # Check registry
     app_path = config.DEFAULT_APP_REGISTRY.get(name, name)
 
+    import threading
+    from utils.window_utils import focus_window
+
+    def post_launch():
+        # Wait up to 5s for the window to appear and bring it to foreground
+        focus_window(name, timeout=5.0)
+        
+        import sys
+        # Launch companion widget
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        companion_script = os.path.join(project_root, "gui", "companion.py")
+        
+        python_exe = sys.executable
+        if python_exe.lower().endswith("python.exe"):
+            python_exe = python_exe.replace("python.exe", "pythonw.exe")
+            
+        try:
+            subprocess.Popen([python_exe, companion_script, "--app", name], creationflags=subprocess.CREATE_NO_WINDOW)
+        except Exception as e:
+            log.error(f"Failed to launch companion widget: {e}")
+
     try:
         os.startfile(app_path)
         log.info(f"🚀 Opened app: {name}")
+        threading.Thread(target=post_launch, daemon=True).start()
         return ToolResult(success=True, message=f"Opening {name}...")
     except Exception:
         try:
             subprocess.Popen(app_path, shell=True)
+            threading.Thread(target=post_launch, daemon=True).start()
             return ToolResult(success=True, message=f"Launched {name}")
         except Exception as e:
             return ToolResult(success=False, error=f"Could not open '{name}': {e}")

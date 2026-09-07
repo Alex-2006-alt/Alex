@@ -11,8 +11,9 @@ from tools import code_tools
 from tools import system_tools
 from tools import notification_tools
 from tools import data_tools
+from tools import memory_tools
 
 __all__ = [
     "web_tools", "youtube_tools", "file_tools", "code_tools",
-    "system_tools", "notification_tools", "data_tools",
+    "system_tools", "notification_tools", "data_tools", "memory_tools",
 ]

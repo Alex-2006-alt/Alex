@@ -28,6 +28,7 @@ def _folder(name: str) -> Path:
     guids = {
         "desktop": "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}",
         "programs": "{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}",
+        "startup": "{B97D20BB-F46A-4C97-BA10-5E3608430854}",
     }
     buf = ctypes.c_wchar_p()
     ctypes.windll.shell32.SHGetKnownFolderPath(
@@ -66,6 +67,27 @@ def make_shortcut(target_dir: Path) -> Path:
     link.Description = "A.L.E.X — Advanced Linguistic Executive System"
     # Python's own icon, so the shortcut isn't a blank page
     link.IconLocation = f"{sys.executable},0"
+    link.save()
+    return path
+
+
+def make_startup_shortcut(target_dir: Path) -> Path:
+    """Create a hidden startup shortcut for the sleep/wake listener."""
+    from win32com.client import Dispatch
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / "ALEX_SleepWakeListener.lnk"
+
+    python_w = sys.executable.replace("python.exe", "pythonw.exe")
+    script = PROJECT_ROOT / "scripts" / "sleep_wake_listener.py"
+
+    shell = Dispatch("WScript.Shell")
+    link = shell.CreateShortCut(str(path))
+    link.TargetPath = python_w
+    link.Arguments = f'"{script}"'
+    link.WorkingDirectory = str(PROJECT_ROOT)
+    link.Description = "ALEX Background Power Listener"
+    link.WindowStyle = 7 # Minimized
     link.save()
     return path
 
@@ -135,8 +157,9 @@ def main():
     print(f"  Project: {PROJECT_ROOT}\n")
 
     if args.uninstall:
-        for folder in ("desktop", "programs"):
-            target = _folder(folder) / SHORTCUT_NAME
+        for folder in ("desktop", "programs", "startup"):
+            name = "ALEX_SleepWakeListener.lnk" if folder == "startup" else SHORTCUT_NAME
+            target = _folder(folder) / name
             if target.exists():
                 target.unlink()
                 print(f"  removed  {target}")
@@ -149,6 +172,9 @@ def main():
 
     programs = make_shortcut(_folder("programs"))
     print(f"  created  {programs}")
+
+    startup = make_startup_shortcut(_folder("startup"))
+    print(f"  created  {startup} (Background Sleep/Wake Listener)")
 
     if args.path or args.all:
         if add_to_path():

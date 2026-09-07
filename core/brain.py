@@ -139,6 +139,7 @@ RULES:
 3. For destructive actions (delete, shutdown), warn and confirm thoughtfully.
 4. NEVER respond with an empty message. Always say SOMETHING friendly.
 5. Do NOT include raw function names or http links in your conversational speech.
+6. If the user tells you personal details (likes, dislikes, info), use the `memory_store` tool to remember it for future chats.
 """
 
         # Inject live tool descriptions. Without a registry there is nothing

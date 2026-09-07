@@ -62,7 +62,60 @@ def parse_args():
         action="store_true",
         help="Run diagnostic tests on all modules",
     )
+    parser.add_argument(
+        "--greet",
+        action="store_true",
+        help="Run a quick startup greeting and exit",
+    )
     return parser.parse_args()
+
+
+def run_greet_mode():
+    """Run a fast startup greeting (reads time, battery, and profile) and exit."""
+    import time
+    from core.speaker import Speaker
+    from utils.system_info import get_system_summary
+    from memory.long_term import LongTermMemory
+    from memory.context import Context
+
+    print(f"\n{'='*60}")
+    print(f"  👋 {config.ASSISTANT_NAME} — Startup Greeting")
+    print(f"{'='*60}\n")
+
+    # Slight delay gives audio devices time to initialize on Windows logon/wake
+    time.sleep(2.0)
+
+    try:
+        speaker = Speaker()
+        ctx = Context().get_context()
+        sys_info = get_system_summary()
+        
+        # Determine battery text if available
+        battery_text = ""
+        if sys_info.get("battery_percent") is not None:
+            battery_text = f" Battery is at {sys_info['battery_percent']}%."
+            if sys_info.get("power_plugged"):
+                battery_text += " Plugged in."
+
+        # Personalization
+        try:
+            mem = LongTermMemory()
+            profile = mem.get_user_profile()
+            name = profile.get("user_name", "boss")
+        except Exception:
+            name = "boss"
+
+        greeting = (
+            f"Good {ctx['time_of_day']}, {name}. "
+            f"It's {ctx['current_time']} on {ctx['current_date']}. "
+            f"{battery_text}"
+        )
+        
+        print(f"Greeting: {greeting}")
+        speaker.say(greeting, block=True)
+
+    except Exception as e:
+        log.error(f"Failed to run greeting: {e}")
 
 
 def run_text_mode():
@@ -207,6 +260,10 @@ def main():
 
     if args.test:
         run_diagnostic_tests()
+        return
+
+    if args.greet:
+        run_greet_mode()
         return
 
     if args.text:
