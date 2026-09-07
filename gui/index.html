@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A.L.E.X — AI Assistant Interface</title>
+    <meta name="description" content="ALEX — Personal AI Assistant with JARVIS-style holographic interface">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Ambient Background -->
+    <div class="ambient-bg">
+        <div class="grid-overlay"></div>
+        <div class="particles" id="particles"></div>
+        <div class="scan-line"></div>
+    </div>
+
+    <!-- Top HUD Bar -->
+    <header class="hud-top" id="hudTop">
+        <div class="hud-top-left">
+            <div class="hud-bracket left">[</div>
+            <span class="hud-label">SYS.STATUS</span>
+            <span class="hud-value status-online" id="systemStatus">ONLINE</span>
+            <div class="hud-bracket right">]</div>
+        </div>
+        <div class="hud-top-center">
+            <div class="logo-container">
+                <span class="logo-text">A.L.E.X</span>
+                <span class="logo-sub">Advanced Linguistic Executive System</span>
+            </div>
+        </div>
+        <div class="hud-top-right">
+            <div class="hud-bracket left">[</div>
+            <span class="hud-label">TIME</span>
+            <span class="hud-value" id="currentTime">00:00:00</span>
+            <div class="hud-bracket right">]</div>
+        </div>
+    </header>
+
+    <!-- Main Interface -->
+    <main class="main-container">
+        <!-- Left Panel — System Stats -->
+        <aside class="panel panel-left" id="panelLeft">
+            <div class="panel-header">
+                <div class="panel-dot"></div>
+                <span>SYSTEM DIAGNOSTICS</span>
+                <div class="panel-line"></div>
+            </div>
+
+            <div class="stat-card" id="cpuCard">
+                <div class="stat-header">
+                    <span class="stat-icon">⬡</span>
+                    <span class="stat-title">CPU LOAD</span>
+                </div>
+                <div class="stat-bar-container">
+                    <div class="stat-bar" id="cpuBar" style="width: 34%"></div>
+                </div>
+                <div class="stat-value"><span id="cpuValue">34</span>%</div>
+            </div>
+
+            <div class="stat-card" id="ramCard">
+                <div class="stat-header">
+                    <span class="stat-icon">◈</span>
+                    <span class="stat-title">MEMORY</span>
+                </div>
+                <div class="stat-bar-container">
+                    <div class="stat-bar ram" id="ramBar" style="width: 62%"></div>
+                </div>
+                <div class="stat-value"><span id="ramValue">62</span>% — <span id="ramUsed">9.9</span>/<span id="ramTotal">16.0</span> GB</div>
+            </div>
+
+            <div class="stat-card" id="diskCard">
+                <div class="stat-header">
+                    <span class="stat-icon">⬢</span>
+                    <span class="stat-title">DISK C:</span>
+                </div>
+                <div class="stat-bar-container">
+                    <div class="stat-bar disk" id="diskBar" style="width: 45%"></div>
+                </div>
+                <div class="stat-value"><span id="diskValue">45</span>% — <span id="diskFree">128</span> GB free</div>
+            </div>
+
+            <div class="stat-card" id="networkCard">
+                <div class="stat-header">
+                    <span class="stat-icon">◉</span>
+                    <span class="stat-title">NETWORK</span>
+                </div>
+                <div class="stat-value network-status">
+                    <span class="net-dot online"></span>
+                    <span id="networkStatus">Connected — 192.168.1.5</span>
+                </div>
+            </div>
+
+            <div class="stat-card" id="batteryCard">
+                <div class="stat-header">
+                    <span class="stat-icon">⚡</span>
+                    <span class="stat-title">POWER</span>
+                </div>
+                <div class="stat-bar-container">
+                    <div class="stat-bar battery" id="batteryBar" style="width: 85%"></div>
+                </div>
+                <div class="stat-value"><span id="batteryValue">85</span>% — <span id="batteryStatus">Charging</span></div>
+            </div>
+
+            <div class="panel-footer">
+                <span class="footer-label">UPTIME</span>
+                <span class="footer-value" id="uptime">04:23:17</span>
+            </div>
+        </aside>
+
+        <!-- Center — AI Core & Live Inspector -->
+        <section class="center-core">
+            <!-- Arc Reactor / AI Orb -->
+            <div class="ai-core-container" id="aiCore">
+                <div class="core-ring ring-outer">
+                    <svg viewBox="0 0 300 300">
+                        <circle cx="150" cy="150" r="145" class="ring-track"/>
+                        <circle cx="150" cy="150" r="145" class="ring-progress ring-1"/>
+                    </svg>
+                </div>
+                <div class="core-ring ring-middle">
+                    <svg viewBox="0 0 240 240">
+                        <circle cx="120" cy="120" r="115" class="ring-track"/>
+                        <circle cx="120" cy="120" r="115" class="ring-progress ring-2"/>
+                    </svg>
+                </div>
+                <div class="core-ring ring-inner">
+                    <svg viewBox="0 0 180 180">
+                        <circle cx="90" cy="90" r="85" class="ring-track"/>
+                        <circle cx="90" cy="90" r="85" class="ring-progress ring-3"/>
+                    </svg>
+                </div>
+
+                <!-- Center Orb -->
+                <div class="orb" id="orb" onclick="toggleListening()">
+                    <div class="orb-glow"></div>
+                    <div class="orb-inner">
+                        <div class="orb-icon" id="orbIcon">◆</div>
+                    </div>
+                    <div class="orb-pulse" id="orbPulse"></div>
+                </div>
+
+                <!-- Status Text -->
+                <div class="core-status" id="coreStatus">
+                    <span class="status-text" id="statusText">STANDBY</span>
+                </div>
+            </div>
+
+            <!-- Audio Waveform -->
+            <div class="waveform-container" id="waveformContainer">
+                <canvas id="waveformCanvas" width="600" height="80"></canvas>
+            </div>
+
+            <!-- NEW: Live Dialogue & Action Inspector -->
+            <div class="inspector-card" id="inspectorCard">
+                <div class="inspector-header">
+                    <div class="inspector-title-group">
+                        <span class="inspector-dot" id="inspectorDot"></span>
+                        <span class="inspector-title">LIVE DIALOGUE INSPECTOR</span>
+                    </div>
+                    <span class="inspector-badge" id="inspectorStateBadge">READY</span>
+                </div>
+                <div class="inspector-body">
+                    <!-- Live Transcribed Speech -->
+                    <div class="inspector-box speech-box">
+                        <div class="box-label">
+                            <span class="box-icon">🎤</span>
+                            <span>WHAT YOU ARE SAYING:</span>
+                        </div>
+                        <div class="box-content speech-content" id="liveSpeechPreview">Click LISTEN or speak to see live transcription...</div>
+                    </div>
+                    <!-- AI Response & Action Inspector -->
+                    <div class="inspector-box response-box">
+                        <div class="box-label">
+                            <span class="box-icon">🤖</span>
+                            <span>WHAT ALEX IS RESPONDING:</span>
+                        </div>
+                        <div class="box-content response-content" id="liveResponsePreview">Awaiting command...</div>
+                        <div class="action-inspector" id="liveActionInspector" style="display: none;">
+                            <div class="action-tag-row">
+                                <span class="action-badge" id="inspectorActionName">TOOL: None</span>
+                                <span class="action-status-badge" id="inspectorActionStatus">SUCCESS</span>
+                            </div>
+                            <pre class="action-params" id="inspectorActionParams">{}</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="quick-actions" id="quickActions">
+                <button class="action-btn" id="btnListen" onclick="toggleListening()">
+                    <span class="btn-icon">🎤</span>
+                    <span class="btn-label">LISTEN</span>
+                </button>
+                <button class="action-btn" id="btnScreenshot" onclick="sendCommand('take a screenshot')">
+                    <span class="btn-icon">📸</span>
+                    <span class="btn-label">CAPTURE</span>
+                </button>
+                <button class="action-btn" id="btnSearch" onclick="showSearchModal()">
+                    <span class="btn-icon">🌐</span>
+                    <span class="btn-label">SEARCH</span>
+                </button>
+                <button class="action-btn" id="btnApps" onclick="sendCommand('list running processes')">
+                    <span class="btn-icon">⚙️</span>
+                    <span class="btn-label">PROCESSES</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Right Panel — Conversation Log & Side Drawer -->
+        <aside class="panel panel-right" id="panelRight">
+            <div class="panel-header">
+                <div class="panel-dot"></div>
+                <span>COMMUNICATION LOG</span>
+                <div class="panel-line"></div>
+            </div>
+
+            <div class="chat-container" id="chatContainer">
+                <div class="chat-messages" id="chatMessages">
+                    <div class="message system-msg">
+                        <div class="msg-header">
+                            <span class="msg-sender">SYSTEM</span>
+                            <span class="msg-time" data-time="init">--:--</span>
+                        </div>
+                        <div class="msg-body">A.L.E.X interface initialized. Voice, STT, TTS, and AI Inspector ready.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="chat-input-area">
+                <div class="input-glow"></div>
+                <input
+                    type="text"
+                    id="chatInput"
+                    class="chat-input"
+                    placeholder="Enter command or talk..."
+                    autocomplete="off"
+                    spellcheck="false"
+                />
+                <button class="send-btn" id="sendBtn" onclick="handleSend()">
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="currentColor"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Active Modules Bar -->
+            <div class="modules-bar">
+                <div class="module-chip active" id="modSTT">STT</div>
+                <div class="module-chip active" id="modTTS">TTS</div>
+                <div class="module-chip active" id="modLLM">LLM</div>
+                <div class="module-chip active" id="modWAKE">WAKE</div>
+                <div class="module-chip active" id="modACT">ACT</div>
+            </div>
+        </aside>
+
+
+    </main>
+
+    <!-- Bottom HUD Bar -->
+    <footer class="hud-bottom" id="hudBottom">
+        <div class="hud-bottom-section">
+            <span class="hud-label">LLM</span>
+            <span class="hud-value accent" id="llmProvider">GEMINI 2.0</span>
+        </div>
+        <div class="hud-bottom-section">
+            <span class="hud-label">STT</span>
+            <span class="hud-value" id="sttEngine">WHISPER BASE</span>
+        </div>
+        <div class="hud-bottom-section">
+            <span class="hud-label">TTS</span>
+            <span class="hud-value" id="ttsEngine">PYTTSX3</span>
+        </div>
+        <div class="hud-bottom-center">
+            <div class="hud-hexagon"></div>
+            <span class="hud-label">WAKE WORD</span>
+            <span class="hud-value wake-word">"HEY ALEX"</span>
+            <div class="hud-hexagon"></div>
+        </div>
+        <div class="hud-bottom-section">
+            <span class="hud-label">ACTIONS</span>
+            <span class="hud-value" id="actionCount">15 LOADED</span>
+        </div>
+        <div class="hud-bottom-section">
+            <span class="hud-label">PLUGINS</span>
+            <span class="hud-value" id="pluginCount">4 ACTIVE</span>
+        </div>
+        <div class="hud-bottom-section">
+            <span class="hud-label">SESSION</span>
+            <span class="hud-value" id="sessionMsgs">0 MSGS</span>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

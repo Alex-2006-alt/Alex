@@ -1,0 +1,23 @@
+# ─── Secrets ──────────────────────────────────────────────────────────────────
+.env
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# ─── Generated data ───────────────────────────────────────────────────────────
+data/logs/
+data/recordings/
+data/screenshots/
+data/memory.db
+data/memory.db-journal
+
+# ─── Editors / OS ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
