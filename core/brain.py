@@ -302,7 +302,7 @@ RULES:
             # Guard against Alex claiming to have done something it didn't.
             # Under load the model often returns "Opening YouTube for you!" with
             # no action block at all, which reads as a silent failure.
-            result = self._repair_unfulfilled_promise(enriched_input, result)
+            result = self._repair_unfulfilled_promise(user_input, enriched_input, result)
 
             log.info(f"⚡ Fast path: action={result.get('action')}")
             return result
@@ -319,18 +319,54 @@ RULES:
         re.IGNORECASE,
     )
 
-    def _repair_unfulfilled_promise(self, prompt: str, result: dict) -> dict:
+    # Question forms, and phrasings that describe capabilities rather than
+    # announce an action. "What can you do" legitimately answers with
+    # "...opening apps, playing music..." and must not be treated as a promise.
+    _QUESTION_STARTS = (
+        "what", "who", "when", "where", "why", "how", "which",
+        "can you", "could you", "do you", "are you", "is there",
+        "tell me", "explain", "describe", "list",
+    )
+    _CAPABILITY_HINTS = (
+        "i can ", "i can'", "i'm able", "i am able", "such as", "for example",
+        "here's what", "here is what", "things like", "like this:", "•", "- ",
+        "1.", "2.", "my abilities", "i'm capable", "i am capable",
+    )
+    # An action acknowledgement is a short one-liner. A paragraph is prose.
+    _MAX_PROMISE_LEN = 240
+
+    def _is_question(self, text: str) -> bool:
+        stripped = text.strip().lower()
+        return stripped.endswith("?") or stripped.startswith(self._QUESTION_STARTS)
+
+    def _repair_unfulfilled_promise(self, user_input: str, prompt: str, result: dict) -> dict:
         """
         Catch responses that promise an action but carry no action block.
 
         Retries once with an explicit instruction to emit the block. If the
         model still won't, rewrite the response so Alex admits it rather than
         cheerfully reporting success it never achieved.
+
+        Deliberately conservative: a false positive here destroys a perfectly
+        good conversational answer, which is worse than the bug it fixes.
         """
         if result.get("action"):
             return result
 
         response = result.get("response", "")
+
+        # The user asked a question — an answer is the correct outcome.
+        if self._is_question(user_input):
+            return result
+
+        # Long or list-shaped replies are describing capabilities, not acting.
+        if len(response) > self._MAX_PROMISE_LEN:
+            return result
+
+        lowered = response.lower()
+        if any(hint in lowered for hint in self._CAPABILITY_HINTS):
+            return result
+
         if not self._PROMISE_RE.search(response):
             return result
 

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tests for the Brain: action-block parsing, step-result substitution, and the
 reflection loop that lets a plan grow.
 """
@@ -13,7 +13,7 @@ from core.tool_registry import ToolRegistry, ToolSpec, ToolResult, SafetyLevel
 
 @pytest.fixture
 def brain():
-    """A Brain with no LLM client — only its pure helpers are exercised."""
+    """A Brain with no LLM client â€” only its pure helpers are exercised."""
     return Brain(provider="gemini")
 
 
@@ -57,11 +57,39 @@ class TestUnfulfilledPromiseRepair:
 
     def test_response_with_an_action_is_left_alone(self, brain):
         result = {"response": "Opening YouTube!", "action": "web_open", "params": {}}
-        assert brain._repair_unfulfilled_promise("p", dict(result)) == result
+        assert brain._repair_unfulfilled_promise("open yt", "p", dict(result)) == result
 
     def test_plain_conversation_is_left_alone(self, brain):
         result = {"response": "I'm doing great, thanks!", "action": None, "params": None}
-        assert brain._repair_unfulfilled_promise("p", dict(result)) == result
+        assert brain._repair_unfulfilled_promise("how are you", "p", dict(result)) == result
+
+    def test_a_capability_answer_is_not_a_promise(self, brain):
+        """
+        Regression: "what can you do" answers legitimately contain 'opening'
+        and 'playing'. Firing the guard here replaced a good answer with an
+        error message.
+        """
+        result = {
+            "response": "I can help with lots! Opening apps, playing music on YouTube, "
+                        "searching the web, taking screenshots, and managing your files.",
+            "action": None,
+            "params": None,
+        }
+        assert brain._repair_unfulfilled_promise("what can you do", "p", dict(result)) == result
+
+    @pytest.mark.parametrize("question", [
+        "what can you do",
+        "how do you play music?",
+        "can you open chrome",
+        "Tell me what you can do",
+    ])
+    def test_questions_are_never_repaired(self, brain, question):
+        result = {"response": "I'd start by opening the browser.", "action": None, "params": None}
+        assert brain._repair_unfulfilled_promise(question, "p", dict(result)) == result
+
+    def test_a_long_prose_answer_is_not_a_promise(self, brain):
+        result = {"response": "Opening a file " + "and so on " * 40, "action": None, "params": None}
+        assert brain._repair_unfulfilled_promise("do stuff", "p", dict(result)) == result
 
     @pytest.mark.parametrize("text", [
         "Opening YouTube for you.",
@@ -79,14 +107,14 @@ class TestUnfulfilledPromiseRepair:
             lambda prompt: 'Opening it!\n```action\n{"action": "web_open", "params": {"url": "https://x.com"}}\n```',
         )
         repaired = brain._repair_unfulfilled_promise(
-            "open x", {"response": "Opening X for you.", "action": None, "params": None}
+            "open x", "p", {"response": "Opening X for you.", "action": None, "params": None}
         )
         assert repaired["action"] == "web_open"
 
     def test_unrecoverable_promise_becomes_an_honest_answer(self, brain, monkeypatch):
         monkeypatch.setattr(brain, "_raw_llm_call_with_history", lambda prompt: "Opening it now!")
         repaired = brain._repair_unfulfilled_promise(
-            "open x", {"response": "Opening X for you.", "action": None, "params": None}
+            "open x", "p", {"response": "Opening X for you.", "action": None, "params": None}
         )
         assert repaired["action"] is None
         assert "couldn't actually carry it out" in repaired["response"]
@@ -97,13 +125,13 @@ class TestUnfulfilledPromiseRepair:
 
         monkeypatch.setattr(brain, "_raw_llm_call_with_history", boom)
         repaired = brain._repair_unfulfilled_promise(
-            "open x", {"response": "Opening X for you.", "action": None, "params": None}
+            "open x", "p", {"response": "Opening X for you.", "action": None, "params": None}
         )
         assert "couldn't actually carry it out" in repaired["response"]
 
 
 class TestResolveParams:
-    """{{step_N.result}} substitution — without it, depends_on only sequences."""
+    """{{step_N.result}} substitution â€” without it, depends_on only sequences."""
 
     def test_reference_is_replaced(self, brain):
         params = {"body": "{{step_1.result}}"}
@@ -281,3 +309,4 @@ class TestCurrentPlanLifecycle:
     def test_a_finished_plan_is_still_readable(self, brain):
         brain._current_plan = Plan(goal="g", steps=[Step(id=1, action="a", params={})])
         assert brain.get_current_plan()["goal"] == "g"
+
