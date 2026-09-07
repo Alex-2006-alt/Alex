@@ -323,14 +323,18 @@ function renderConfirmation(item) {
     const card = document.createElement('div');
     card.className = 'message confirm-msg';
     card.dataset.confirmId = item.id;
+    const bodyContent = item.summary
+        ? `<strong>${escapeHtml(item.summary)}</strong>`
+        : `A.L.E.X wants to run <strong>${escapeHtml(item.tool)}</strong>
+           <pre class="confirm-params">${escapeHtml(JSON.stringify(item.params, null, 2))}</pre>`;
+
     card.innerHTML = `
         <div class="msg-header">
             <span class="msg-sender">⚠ CONFIRMATION REQUIRED</span>
             <span class="msg-time" data-countdown>${item.expires_in}s</span>
         </div>
         <div class="msg-body">
-            A.L.E.X wants to run <strong>${escapeHtml(item.tool)}</strong>
-            <pre class="confirm-params">${escapeHtml(JSON.stringify(item.params, null, 2))}</pre>
+            ${bodyContent}
         </div>
         <div class="confirm-actions">
             <button class="confirm-btn confirm-deny">DENY</button>

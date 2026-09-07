@@ -581,7 +581,7 @@ RULES:
                 continue
             time.sleep(config.LLM_RETRY_DELAY * (attempt + 1))
 
-        return "I'm sorry, I'm having trouble connecting to my AI backend right now."
+        return "My AI provider isn't responding — check your key or try again."
 
     def _raw_llm_call_single(self, prompt: str) -> str:
         """Single raw LLM call without retries."""
@@ -616,13 +616,36 @@ RULES:
             return response.choices[0].message.content
 
         elif self.provider == "openrouter":
-            response = self._client.chat.completions.create(
-                model=config.OPENROUTER_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=config.LLM_MAX_TOKENS,
-            )
-            return response.choices[0].message.content
+            models_to_try = [config.OPENROUTER_MODEL]
+            if hasattr(config, "OPENROUTER_FALLBACK_MODELS") and config.OPENROUTER_FALLBACK_MODELS:
+                models_to_try.extend([m.strip() for m in config.OPENROUTER_FALLBACK_MODELS.split(",") if m.strip()])
+                
+            last_error = None
+            for model_name in models_to_try:
+                try:
+                    response = self._client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.2,
+                        max_tokens=config.LLM_MAX_TOKENS,
+                    )
+                    
+                    if not hasattr(response, "choices") or not response.choices:
+                        raise ValueError(f"Provider returned invalid response: {response}")
+                        
+                    return response.choices[0].message.content
+                except Exception as e:
+                    log.warning(f"OpenRouter model {model_name} failed: {e}")
+                    last_error = e
+            
+            if config.GEMINI_API_KEY:
+                log.warning("All OpenRouter models failed. Falling back to Gemini.")
+                self.provider = "gemini"
+                self._client = None
+                self._init_client()
+                return self._raw_llm_call_single(prompt)
+                
+            raise last_error or ValueError("All OpenRouter models failed")
 
         return ""
 
@@ -648,7 +671,7 @@ RULES:
                 continue
             time.sleep(config.LLM_RETRY_DELAY * (attempt + 1))
 
-        return "I'm sorry, I'm having trouble connecting to my AI backend right now. Please try again."
+        return "My AI provider isn't responding — check your key or try again."
 
     def _raw_llm_call_with_history_single(self, user_input: str) -> str:
         """Single LLM call with history, no retries."""
@@ -683,13 +706,37 @@ RULES:
             messages = [{"role": "system", "content": self._build_system_prompt()}]
             messages.extend(self.conversation_history[-config.CONTEXT_WINDOW_SIZE * 2:])
             messages.append({"role": "user", "content": user_input})
-            response = self._client.chat.completions.create(
-                model=config.OPENROUTER_MODEL,
-                messages=messages,
-                temperature=config.LLM_TEMPERATURE,
-                max_tokens=config.LLM_MAX_TOKENS,
-            )
-            return response.choices[0].message.content
+            
+            models_to_try = [config.OPENROUTER_MODEL]
+            if hasattr(config, "OPENROUTER_FALLBACK_MODELS") and config.OPENROUTER_FALLBACK_MODELS:
+                models_to_try.extend([m.strip() for m in config.OPENROUTER_FALLBACK_MODELS.split(",") if m.strip()])
+                
+            last_error = None
+            for model_name in models_to_try:
+                try:
+                    response = self._client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        temperature=config.LLM_TEMPERATURE,
+                        max_tokens=config.LLM_MAX_TOKENS,
+                    )
+                    
+                    if not hasattr(response, "choices") or not response.choices:
+                        raise ValueError(f"Provider returned invalid response: {response}")
+                        
+                    return response.choices[0].message.content
+                except Exception as e:
+                    log.warning(f"OpenRouter model {model_name} failed: {e}")
+                    last_error = e
+                    
+            if config.GEMINI_API_KEY:
+                log.warning("All OpenRouter models failed. Falling back to Gemini.")
+                self.provider = "gemini"
+                self._client = None
+                self._init_client()
+                return self._raw_llm_call_with_history_single(user_input)
+                
+            raise last_error or ValueError("All OpenRouter models failed")
 
         return "I'm sorry, I'm not properly configured."
 

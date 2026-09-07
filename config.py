@@ -84,6 +84,10 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 # Compatible with OpenAI SDK, supports 200+ models
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+OPENROUTER_FALLBACK_MODELS = os.getenv(
+    "OPENROUTER_FALLBACK_MODELS",
+    "minimax/minimax-m3:free,google/gemma-4-31b-it:free"
+)
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # LLM Parameters
@@ -108,6 +112,7 @@ DANGEROUS_ACTIONS = [
     "format_drive",
     "run_command",
 ]
+SHUTDOWN_GRACE_SECONDS = int(os.getenv("SHUTDOWN_GRACE_SECONDS", "30"))
 
 # ─── Safety ───────────────────────────────────────────────────────────────────
 # CONFIRM-level tools (shell_run, system_power, file_delete, process_kill,

@@ -10,6 +10,7 @@ import requests
 
 from core.tool_registry import tool, ToolResult, SafetyLevel
 from utils.logger import log
+from utils.window_utils import focus_window
 
 
 @tool(
@@ -59,6 +60,7 @@ def web_search(params: dict) -> ToolResult:
         if not results:
             # Open browser as fallback
             webbrowser.open(f"https://duckduckgo.com/?q={quote_plus(query)}")
+            focus_window("DuckDuckGo", timeout=3.0)
             return ToolResult(
                 success=True,
                 message=f"Opened DuckDuckGo search for: {query}",
@@ -86,6 +88,7 @@ def web_search(params: dict) -> ToolResult:
         # Fallback to browser
         try:
             webbrowser.open(f"https://duckduckgo.com/?q={quote_plus(query)}")
+            focus_window("DuckDuckGo", timeout=3.0)
             return ToolResult(
                 success=True,
                 message=f"Opened search in browser for: {query}",
@@ -100,6 +103,7 @@ def web_search(params: dict) -> ToolResult:
     description="Open a URL in the default web browser",
     parameters={
         "url": {"type": "string", "description": "The URL to open", "required": True},
+        "focus_title": {"type": "string", "description": "Optional title substring to bring the browser to front (e.g., 'YouTube')", "required": False},
     },
     category="web",
 )
@@ -114,6 +118,11 @@ def web_open(params: dict) -> ToolResult:
     try:
         webbrowser.open(url)
         log.info(f"🌐 Opened URL: {url}")
+        
+        focus_title = params.get("focus_title")
+        if focus_title:
+            focus_window(focus_title, timeout=3.0)
+            
         return ToolResult(success=True, message=f"Opened {url} in your browser")
     except Exception as e:
         return ToolResult(success=False, error=str(e))
@@ -176,3 +185,47 @@ def web_scrape(params: dict) -> ToolResult:
 
     except Exception as e:
         return ToolResult(success=False, error=f"Failed to fetch {url}: {e}")
+
+@tool(
+    name="youtube_play",
+    description="Search and play a video on YouTube",
+    parameters={
+        "query": {"type": "string", "description": "The search query for the YouTube video", "required": True},
+    },
+    category="web",
+)
+def youtube_play(params: dict) -> ToolResult:
+    import re
+    query = params.get("query", "")
+    if not query:
+        return ToolResult(success=False, error="No search query provided")
+
+    search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
+    try:
+        resp = requests.get(search_url, timeout=10, headers=headers)
+        resp.raise_for_status()
+        
+        # Look for the first video ID
+        match = re.search(r'href="/watch\?v=([^"]+)"', resp.text)
+        if match:
+            video_id = match.group(1).split("&")[0]  # strip extra query params
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            webbrowser.open(video_url)
+            focus_window("YouTube", timeout=3.0)
+            
+            log.info(f"▶️ Playing YouTube video: {video_url}")
+            return ToolResult(success=True, message=f"Playing '{query}' on YouTube...")
+            
+    except Exception as e:
+        log.warning(f"Failed to scrape YouTube for '{query}': {e}")
+        
+    # Fallback to search results page
+    webbrowser.open(search_url)
+    focus_window("YouTube", timeout=3.0)
+    return ToolResult(success=True, message=f"Opened YouTube search for '{query}'")
+

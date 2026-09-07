@@ -82,10 +82,22 @@ def _request_confirmation(tool_name: str, params: dict) -> bool:
     _expire_stale()
 
     cid = uuid.uuid4().hex[:12]
+    
+    summary_text = None
+    try:
+        assistant = _get_assistant()
+        if assistant and assistant._tool_registry:
+            spec = assistant._tool_registry.get(tool_name)
+            if spec and spec.confirm_summary:
+                summary_text = spec.confirm_summary(params)
+    except Exception as e:
+        log.debug(f"Failed to generate confirm_summary: {e}")
+
     entry = {
         "id": cid,
         "tool": tool_name,
         "params": params,
+        "summary": summary_text,
         "created": time.time(),
         "event": threading.Event(),
         "approved": False,
@@ -266,6 +278,7 @@ def api_confirmations_list():
                 "id": e["id"],
                 "tool": e["tool"],
                 "params": e["params"],
+                "summary": e.get("summary"),
                 "expires_in": max(0, round(config.CONFIRMATION_TIMEOUT - (time.time() - e["created"]))),
             }
             for e in _pending.values()

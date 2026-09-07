@@ -71,6 +71,15 @@ def app_close(params: dict) -> ToolResult:
     return ToolResult(success=False, error=f"No running process found matching '{name}'")
 
 
+def _process_kill_summary(params: dict) -> str:
+    name = params.get("name")
+    pid = params.get("pid")
+    if name:
+        return f"Force kill the '{name}' process"
+    elif pid:
+        return f"Force kill process ID {pid}"
+    return "Force kill a process"
+
 @tool(
     name="process_kill",
     description="Force kill a process by name or PID",
@@ -80,6 +89,7 @@ def app_close(params: dict) -> ToolResult:
     },
     category="system",
     safety=SafetyLevel.CONFIRM,
+    confirm_summary=_process_kill_summary,
 )
 def process_kill(params: dict) -> ToolResult:
     name = params.get("name", "").lower()
@@ -193,30 +203,47 @@ def system_volume(params: dict) -> ToolResult:
         return ToolResult(success=False, error=f"Volume control failed: {e}")
 
 
+def _system_power_summary(params: dict) -> str:
+    action = params.get("action", "lock").lower()
+    delay = int(params.get("delay_seconds", getattr(config, "SHUTDOWN_GRACE_SECONDS", 30)))
+    if action == "shutdown":
+        return f"shut down this PC in {delay} seconds"
+    elif action == "restart":
+        return f"restart this PC in {delay} seconds"
+    elif action == "sleep":
+        return "put this PC to sleep"
+    return f"{action} this PC"
+
 @tool(
     name="system_power",
     description="Shutdown, restart, sleep, or lock the computer",
     parameters={
         "action": {"type": "string", "description": "'shutdown', 'restart', 'sleep', or 'lock'", "required": True},
-        "delay_seconds": {"type": "integer", "description": "Delay in seconds (default: 0)", "required": False},
+        "delay_seconds": {"type": "integer", "description": "Delay in seconds (default: 30 for shutdown)", "required": False},
     },
     category="system",
     safety=SafetyLevel.CONFIRM,
+    confirm_summary=_system_power_summary,
 )
 def system_power(params: dict) -> ToolResult:
     action = params.get("action", "lock").lower()
-    delay = int(params.get("delay_seconds", 0))
+    
+    # Use grace period for shutdown/restart if delay not explicitly set
+    if "delay_seconds" not in params and action in ["shutdown", "restart"]:
+        delay = getattr(config, "SHUTDOWN_GRACE_SECONDS", 30)
+    else:
+        delay = int(params.get("delay_seconds", 0))
 
     try:
         if action == "shutdown":
             os.system(f"shutdown /s /t {delay}")
-            return ToolResult(success=True, message=f"Shutting down in {delay} seconds...")
+            return ToolResult(success=True, message=f"Shutting down in {delay} seconds — say 'cancel shutdown' to stop me.")
         elif action == "restart":
             os.system(f"shutdown /r /t {delay}")
-            return ToolResult(success=True, message=f"Restarting in {delay} seconds...")
+            return ToolResult(success=True, message=f"Restarting in {delay} seconds — say 'cancel shutdown' to stop me.")
         elif action == "sleep":
             subprocess.Popen("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
-            return ToolResult(success=True, message="Going to sleep...")
+            return ToolResult(success=True, message="Going to sleep (Note: if hibernation is enabled in Windows, this will hibernate instead).")
         elif action == "lock":
             os.system("rundll32.exe user32.dll,LockWorkStation")
             return ToolResult(success=True, message="Workstation locked")

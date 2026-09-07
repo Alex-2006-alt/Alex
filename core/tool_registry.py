@@ -54,6 +54,8 @@ class ToolSpec:
     #: no approval should be able to authorise, so the user is never asked to
     #: approve something that will be refused anyway.
     precheck: Callable | None = None
+    #: Optional ``fn(params) -> str`` to produce a human sentence for confirmation
+    confirm_summary: Callable | None = None
 
     def prompt_description(self) -> str:
         """Format tool for inclusion in an LLM prompt."""
@@ -257,6 +259,7 @@ def tool(
     category: str = "general",
     examples: list[str] | None = None,
     precheck: Callable | None = None,
+    confirm_summary: Callable | None = None,
 ):
     """
     Decorator to register a function as an Alex tool.
@@ -284,6 +287,7 @@ def tool(
             category=category,
             examples=examples or [],
             precheck=precheck,
+            confirm_summary=confirm_summary,
         )
         ToolRegistry.get_instance().register(spec)
         return fn
