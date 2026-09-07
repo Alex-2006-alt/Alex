@@ -348,16 +348,39 @@ RULES:
             self._current_plan = plan
         self._notify_plan("plan_started", plan.to_dict())
 
-        # Step 2: Execute plan steps
-        try:
-            self._execute_plan(plan)
-        except Exception as e:
-            log.error(f"Plan execution error: {e}")
-            plan.status = "failed"
+        # Steps 2-3: Execute, reflect, and iterate while the goal is unmet.
+        # Results accumulate across iterations so late steps can still refer
+        # back to early ones.
+        step_results: dict[int, str] = {}
+        reflection: dict = {}
 
-        # Step 3: Reflect and generate final response
-        reflection = self._planner.reflect(plan)
-        final_response = reflection.get("final_response", f"Task completed! {plan.summary()}")
+        for iteration in range(1, max(1, config.MAX_AGENT_ITERATIONS) + 1):
+            try:
+                self._execute_plan(plan, step_results)
+            except Exception as e:
+                log.error(f"Plan execution error: {e}")
+                plan.status = "failed"
+                break
+
+            reflection = self._planner.reflect(plan)
+
+            if reflection.get("goal_accomplished"):
+                log.info(f"🎯 Goal accomplished after {iteration} iteration(s)")
+                break
+
+            extra = reflection.get("additional_steps") or []
+            if not extra:
+                break
+            if iteration >= config.MAX_AGENT_ITERATIONS:
+                log.warning(f"Reflection wanted {len(extra)} more step(s) but the iteration budget is spent")
+                break
+
+            added = self._append_steps(plan, extra)
+            if not added:
+                break
+            log.info(f"🔁 Reflection added {added} step(s); running iteration {iteration + 1}")
+
+        final_response = reflection.get("final_response") or f"Task completed! {plan.summary()}"
 
         plan.status = "done" if not plan.has_failures() else "partial"
         plan.final_response = final_response
@@ -379,12 +402,46 @@ RULES:
             "plan": plan.to_dict(),
         }
 
-    def _execute_plan(self, plan):
-        """Execute all steps in the plan, feeding results back as context."""
+    def _append_steps(self, plan, steps_data: list[dict]) -> int:
+        """
+        Append reflection-suggested steps to a running plan.
+
+        Returns the number actually added — the plan's total is capped at
+        MAX_AGENT_STEPS so a reflection loop cannot grow it without bound.
+        """
+        from core.planner import Step
+
+        room = config.MAX_AGENT_STEPS - len(plan.steps)
+        if room <= 0:
+            log.warning(f"Plan already at MAX_AGENT_STEPS ({config.MAX_AGENT_STEPS}); refusing more")
+            return 0
+
+        next_id = max((s.id for s in plan.steps), default=0) + 1
+        added = 0
+        for s in steps_data[:room]:
+            if not s.get("action"):
+                continue
+            plan.steps.append(Step(
+                id=s.get("id") or next_id,
+                action=s["action"],
+                params=s.get("params", {}) or {},
+                description=s.get("description", ""),
+                depends_on=s.get("depends_on", []) or [],
+            ))
+            next_id = max(next_id, plan.steps[-1].id) + 1
+            added += 1
+        return added
+
+    def _execute_plan(self, plan, step_results: dict[int, str] | None = None):
+        """Execute all pending steps in the plan, feeding results forward."""
         from core.planner import StepStatus
 
-        start_time = time.time()
-        step_results: dict[int, str] = {}
+        if step_results is None:
+            step_results = {}
+
+        # Measured from plan creation, so the budget covers every reflection
+        # iteration rather than resetting for each one.
+        start_time = plan.created_at
 
         while not plan.is_done():
             # Check timeout
@@ -427,6 +484,33 @@ RULES:
         for t in threads:
             t.join(timeout=60)
 
+    # Matches {{step_3.result}} and the shorthand {{step_3}}
+    _STEP_REF = re.compile(r"\{\{\s*step[_ ]?(\d+)(?:\.result)?\s*\}\}", re.IGNORECASE)
+
+    def _resolve_params(self, value, step_results: dict[int, str]):
+        """
+        Replace {{step_N.result}} references with the output of step N.
+
+        Walks nested dicts and lists. An unknown step id is left as-is rather
+        than blanked, so a broken reference is visible in the logs and in the
+        error the tool returns instead of silently becoming an empty string.
+        """
+        if isinstance(value, dict):
+            return {k: self._resolve_params(v, step_results) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._resolve_params(v, step_results) for v in value]
+        if not isinstance(value, str):
+            return value
+
+        def substitute(match):
+            step_id = int(match.group(1))
+            if step_id in step_results:
+                return str(step_results[step_id])
+            log.warning(f"Unresolved plan reference {match.group(0)} — step {step_id} has no result")
+            return match.group(0)
+
+        return self._STEP_REF.sub(substitute, value)
+
     def _execute_single_step(self, step, plan, step_results: dict):
         """Execute a single plan step via the tool registry."""
         from core.planner import StepStatus
@@ -439,9 +523,12 @@ RULES:
 
         try:
             if self._tool_registry:
+                resolved_params = self._resolve_params(step.params, step_results)
+                if resolved_params != step.params:
+                    log.info(f"🔗 Step {step.id} params resolved from previous results")
                 result = self._tool_registry.execute(
                     step.action,
-                    step.params,
+                    resolved_params,
                     confirm_callback=self._step_confirm_callback(),
                 )
                 step.result = result.to_response() if hasattr(result, 'to_response') else str(result)
@@ -453,7 +540,9 @@ RULES:
                 step.status = StepStatus.FAILED
                 step.error = step.result
 
-            step_results[step.id] = str(step.result)[:500]
+            # Stored in full: a later step may need the whole output (a file's
+            # contents, a scrape). The prompt and UI truncate at their own edges.
+            step_results[step.id] = str(step.result)
             log.info(f"✅ Step {step.id} done: {str(step.result)[:100]}")
 
         except Exception as e:

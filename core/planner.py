@@ -156,6 +156,13 @@ RULES:
 - Keep each step atomic and focused on ONE action
 - Maximum {max_steps} steps
 - If no action is needed (just a question), return {{"steps": [], "reasoning": "No action needed"}}
+
+USING A PREVIOUS STEP'S OUTPUT:
+Write {{{{step_N.result}}}} inside any param value and it is replaced with the
+output of step N before the step runs. The step MUST list N in its depends_on.
+Example — read a file, then email its contents:
+  {{"id": 1, "action": "file_read", "params": {{"path": "C:/notes.txt"}}, "depends_on": []}}
+  {{"id": 2, "action": "email_send", "params": {{"to": "me@example.com", "subject": "Notes", "body": "{{{{step_1.result}}}}"}}, "depends_on": [1]}}
 """
 
     REFLECT_PROMPT_TEMPLATE = """You are reviewing the results of executed plan steps.
@@ -348,17 +355,13 @@ Return ONLY a JSON object:
 
     def _get_tool_descriptions(self) -> str:
         """Get tool descriptions for the planning prompt."""
-        if self.tool_registry:
+        if self.tool_registry and len(self.tool_registry):
             return self.tool_registry.get_descriptions_for_prompt()
 
-        # Fallback: use config action names
-        actions = [
-            "open_app, close_app, search_web, open_url, take_screenshot,",
-            "type_text, press_key, volume_control, file_operation,",
-            "run_command, system_control, kill_process, set_reminder,",
-            "get_weather, media_control, clipboard, send_email, run_code",
-        ]
-        return "\n".join(actions)
+        # No registry means nothing is callable. Listing the pre-migration
+        # action names here just produced plans full of unknown tools.
+        log.error("Planner has no tools available")
+        return "(none — no tools are registered, so no plan can be executed)"
 
     def _parse_json_response(self, raw: str) -> dict | None:
         """Extract JSON from LLM response, handling markdown code fences."""

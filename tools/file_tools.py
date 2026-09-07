@@ -15,18 +15,43 @@ from utils.logger import log
 import config
 
 
-def _is_allowed_path(path: str) -> bool:
-    """Check if the path is within allowed directories."""
-    if not config.ALLOWED_FILE_PATHS:
+def _is_allowed_path(path) -> bool:
+    """
+    Check whether a path is inside one of config.ALLOWED_FILE_PATHS.
+
+    resolve() collapses '..' first, so traversal out of an allowed root is
+    caught rather than matched on the literal prefix.
+    """
+    if not config.ENFORCE_FILE_ALLOWLIST or not config.ALLOWED_FILE_PATHS:
         return True  # No restrictions
-    path_obj = Path(path).resolve()
+    path_obj = Path(path).expanduser().resolve()
     for allowed in config.ALLOWED_FILE_PATHS:
         try:
-            path_obj.relative_to(Path(allowed).resolve())
+            path_obj.relative_to(Path(allowed).expanduser().resolve())
             return True
         except ValueError:
             continue
     return False
+
+
+def _deny_if_outside(path, what: str = "write to") -> ToolResult | None:
+    """
+    Guard for the tools that modify the filesystem. Returns a failure
+    ToolResult to hand straight back, or None when the path is allowed.
+
+    Reading and listing are deliberately unrestricted — the allow-list exists
+    to stop Alex from *changing* things outside the user's own directories.
+    """
+    if _is_allowed_path(path):
+        return None
+
+    roots = ", ".join(config.ALLOWED_FILE_PATHS)
+    log.error(f"⛔ Refused to {what} outside the allow-list: {path}")
+    return ToolResult(
+        success=False,
+        message=f"I can only {what} files inside your own folders.",
+        error=f"Path {path} is outside ALLOWED_FILE_PATHS ({roots})",
+    )
 
 
 @tool(
@@ -85,6 +110,10 @@ def file_write(params: dict) -> ToolResult:
         return ToolResult(success=False, error="No file path provided")
 
     p = Path(path).expanduser().resolve()
+
+    denied = _deny_if_outside(p, "write to")
+    if denied:
+        return denied
 
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -210,6 +239,12 @@ def file_move(params: dict) -> ToolResult:
     if not src.exists():
         return ToolResult(success=False, error=f"Source not found: {src}")
 
+    # A move changes both ends, so both must be allowed
+    for candidate in (src, dst):
+        denied = _deny_if_outside(candidate, "move")
+        if denied:
+            return denied
+
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
@@ -234,6 +269,11 @@ def file_copy(params: dict) -> ToolResult:
 
     if not src.exists():
         return ToolResult(success=False, error=f"Source not found: {src}")
+
+    # Only the destination is created, so only it needs to be allowed
+    denied = _deny_if_outside(dst, "copy to")
+    if denied:
+        return denied
 
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -264,6 +304,10 @@ def file_delete(params: dict) -> ToolResult:
     if not path.exists():
         return ToolResult(success=False, error=f"Path not found: {path}")
 
+    denied = _deny_if_outside(path, "delete")
+    if denied:
+        return denied
+
     try:
         if path.is_dir():
             if recursive:
@@ -288,6 +332,11 @@ def file_delete(params: dict) -> ToolResult:
 )
 def file_mkdir(params: dict) -> ToolResult:
     path = Path(params.get("path", "")).expanduser().resolve()
+
+    denied = _deny_if_outside(path, "create folders in")
+    if denied:
+        return denied
+
     try:
         path.mkdir(parents=True, exist_ok=True)
         return ToolResult(success=True, message=f"Created directory: {path}", artifacts=[str(path)])

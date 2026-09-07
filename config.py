@@ -63,6 +63,9 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
 AGENT_MODE = os.getenv("AGENT_MODE", "true").lower() == "true"
 MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "10"))   # Max steps per plan
 AGENT_TIMEOUT = int(os.getenv("AGENT_TIMEOUT", "120"))       # Seconds before timeout
+# How many execute → reflect rounds a single goal may take. 1 disables the
+# ReAct loop and runs the initial plan only.
+MAX_AGENT_ITERATIONS = int(os.getenv("MAX_AGENT_ITERATIONS", "3"))
 PARALLEL_STEPS = os.getenv("PARALLEL_STEPS", "true").lower() == "true"  # Parallel independent steps
 
 # Ollama settings (local LLM)
@@ -131,7 +134,13 @@ SHELL_DENY_PATTERNS = [
     "rm -rf /",
 ]
 
-# Allowed directories for file operations (empty = all, USE WITH CAUTION)
+# Enforce ALLOWED_FILE_PATHS on the tools that MODIFY the filesystem
+# (file_write, file_move, file_copy, file_delete, file_mkdir). Reading and
+# listing stay unrestricted. Set false to allow writes anywhere.
+ENFORCE_FILE_ALLOWLIST = os.getenv("ENFORCE_FILE_ALLOWLIST", "true").lower() == "true"
+
+# Directories Alex may modify. Empty list = no restriction (USE WITH CAUTION).
+# Add your project roots here if you want Alex writing into them.
 ALLOWED_FILE_PATHS = [
     str(Path.home()),          # User home directory
     str(Path.home() / "Desktop"),
