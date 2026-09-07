@@ -35,18 +35,18 @@ class TestDispatcherBuiltins:
         assert result is not None
         assert "provide a URL" in result.lower() or "example" in result.lower()
 
-    @patch("webbrowser.open")
-    def test_open_url_with_url(self, mock_open):
+    @patch("os.startfile")
+    def test_open_url_with_url(self, mock_startfile):
         result = self.dispatcher.dispatch("open_url https://example.com")
         assert result is not None
         assert "example.com" in result
-        mock_open.assert_called_once_with("https://example.com")
+        mock_startfile.assert_called_once_with("https://example.com")
 
-    @patch("webbrowser.open")
-    def test_open_url_adds_https(self, mock_open):
+    @patch("os.startfile")
+    def test_open_url_adds_https(self, mock_startfile):
         result = self.dispatcher.dispatch("open_url google.com")
         assert result is not None
-        mock_open.assert_called_once_with("https://google.com")
+        mock_startfile.assert_called_once_with("https://google.com")
 
     def test_unrecognized_command_returns_none(self):
         result = self.dispatcher.dispatch("tell me a joke")

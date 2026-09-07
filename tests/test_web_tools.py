@@ -2,10 +2,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 from tools.web_tools import youtube_play, ToolResult
 
+@patch("tools.web_tools._open_url")
 @patch("tools.web_tools.requests.get")
-@patch("tools.web_tools.webbrowser.open")
 @patch("tools.web_tools.focus_window")
-def test_youtube_play_success(mock_focus, mock_open, mock_get):
+def test_youtube_play_success(mock_focus, mock_get, mock_open):
     """Test playing a YouTube video successfully finds the ID and opens it."""
     
     mock_response = MagicMock()
@@ -20,10 +20,10 @@ def test_youtube_play_success(mock_focus, mock_open, mock_get):
     mock_focus.assert_called_with("YouTube", timeout=3.0)
     assert "Playing" in result.message
 
+@patch("tools.web_tools._open_url")
 @patch("tools.web_tools.requests.get")
-@patch("tools.web_tools.webbrowser.open")
 @patch("tools.web_tools.focus_window")
-def test_youtube_play_fallback(mock_focus, mock_open, mock_get):
+def test_youtube_play_fallback(mock_focus, mock_get, mock_open):
     """Test youtube_play fallback to search URL if scrape fails."""
     
     mock_get.side_effect = Exception("Connection error")

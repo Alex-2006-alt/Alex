@@ -3,6 +3,8 @@ ALEX — Web Tools
 Web search, URL opening, and page scraping capabilities.
 """
 
+import os
+import subprocess
 import webbrowser
 from urllib.parse import quote_plus
 
@@ -11,6 +13,43 @@ import requests
 from core.tool_registry import tool, ToolResult, SafetyLevel
 from utils.logger import log
 from utils.window_utils import focus_window
+
+
+def _open_url(url: str) -> bool:
+    """
+    Open a URL in the default browser, reliably from any thread.
+
+    ``webbrowser.open()`` silently fails when called from Flask worker threads
+    on Windows. We try three progressively more robust methods:
+      1. ``os.startfile`` (Windows-native, works from any thread)
+      2. ``subprocess`` with ``start`` (shell-level fallback)
+      3. ``webbrowser.open`` (standard library last resort)
+    """
+    # Method 1: os.startfile (Windows only, most reliable from background threads)
+    if hasattr(os, "startfile"):
+        try:
+            os.startfile(url)
+            log.info(f"🌐 Opened URL (os.startfile): {url}")
+            return True
+        except Exception as e:
+            log.debug(f"os.startfile failed: {e}")
+
+    # Method 2: subprocess 'start' command (Windows)
+    try:
+        subprocess.Popen(["start", url], shell=True)
+        log.info(f"🌐 Opened URL (subprocess): {url}")
+        return True
+    except Exception as e:
+        log.debug(f"subprocess start failed: {e}")
+
+    # Method 3: webbrowser (may silently fail from threads)
+    try:
+        webbrowser.open(url)
+        log.info(f"🌐 Opened URL (webbrowser): {url}")
+        return True
+    except Exception as e:
+        log.error(f"All browser methods failed for {url}: {e}")
+        return False
 
 
 @tool(
@@ -59,7 +98,7 @@ def web_search(params: dict) -> ToolResult:
 
         if not results:
             # Open browser as fallback
-            webbrowser.open(f"https://duckduckgo.com/?q={quote_plus(query)}")
+            _open_url(f"https://duckduckgo.com/?q={quote_plus(query)}")
             focus_window("DuckDuckGo", timeout=3.0)
             return ToolResult(
                 success=True,
@@ -87,7 +126,7 @@ def web_search(params: dict) -> ToolResult:
         log.error(f"Web search failed: {e}")
         # Fallback to browser
         try:
-            webbrowser.open(f"https://duckduckgo.com/?q={quote_plus(query)}")
+            _open_url(f"https://duckduckgo.com/?q={quote_plus(query)}")
             focus_window("DuckDuckGo", timeout=3.0)
             return ToolResult(
                 success=True,
@@ -116,8 +155,7 @@ def web_open(params: dict) -> ToolResult:
         url = "https://" + url
 
     try:
-        webbrowser.open(url)
-        log.info(f"🌐 Opened URL: {url}")
+        _open_url(url)
         
         focus_title = params.get("focus_title")
         if focus_title:
@@ -215,7 +253,7 @@ def youtube_play(params: dict) -> ToolResult:
             video_id = match.group(1).split("&")[0]  # strip extra query params
             video_url = f"https://www.youtube.com/watch?v={video_id}"
             
-            webbrowser.open(video_url)
+            _open_url(video_url)
             focus_window("YouTube", timeout=3.0)
             
             log.info(f"▶️ Playing YouTube video: {video_url}")
@@ -225,7 +263,7 @@ def youtube_play(params: dict) -> ToolResult:
         log.warning(f"Failed to scrape YouTube for '{query}': {e}")
         
     # Fallback to search results page
-    webbrowser.open(search_url)
+    _open_url(search_url)
     focus_window("YouTube", timeout=3.0)
     return ToolResult(success=True, message=f"Opened YouTube search for '{query}'")
 

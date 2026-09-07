@@ -99,12 +99,16 @@ class CommandDispatcher:
     @staticmethod
     def _handle_open_url(args: str) -> str:
         """Open a URL in the default browser."""
+        import os
         url = args.strip()
         if not url:
             return "Please provide a URL. Example: open_url https://google.com"
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
-        webbrowser.open(url)
+        if hasattr(os, "startfile"):
+            os.startfile(url)
+        else:
+            webbrowser.open(url)
         return f"Opening {url} in your browser."
 
     @staticmethod
