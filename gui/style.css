@@ -203,6 +203,12 @@ body {
     50% { opacity: 0.6; }
 }
 
+.status-offline {
+    color: var(--danger);
+    text-shadow: 0 0 8px var(--danger-glow);
+    animation: statusPulse 2s ease-in-out infinite;
+}
+
 .hud-top-center {
     text-align: center;
 }

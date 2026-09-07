@@ -98,17 +98,19 @@ class CommandDispatcher:
 
     @staticmethod
     def _handle_open_url(args: str) -> str:
-        """Open a URL in the default browser."""
-        import os
+        """Open a URL in the default browser, and bring it to the front."""
+        from tools.web_tools import open_url, _page_hint
+        from utils.window_utils import focus_browser
+
         url = args.strip()
         if not url:
             return "Please provide a URL. Example: open_url https://google.com"
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
-        if hasattr(os, "startfile"):
-            os.startfile(url)
-        else:
-            webbrowser.open(url)
+
+        if not open_url(url):
+            return f"I couldn't open {url} in a browser."
+        focus_browser(_page_hint(url))
         return f"Opening {url} in your browser."
 
     @staticmethod

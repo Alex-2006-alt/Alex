@@ -6,25 +6,30 @@ Web search, URL opening, and page scraping capabilities.
 import os
 import subprocess
 import webbrowser
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import requests
 
 from core.tool_registry import tool, ToolResult, SafetyLevel
 from utils.logger import log
-from utils.window_utils import focus_window
+from utils.window_utils import focus_browser, allow_foreground_for_any_process
 
 
-def _open_url(url: str) -> bool:
+def open_url(url: str) -> bool:
     """
     Open a URL in the default browser, reliably from any thread.
 
-    ``webbrowser.open()`` silently fails when called from Flask worker threads
-    on Windows. We try three progressively more robust methods:
+    ``webbrowser.open()`` can silently fail when called from Flask worker
+    threads on Windows, so we try three progressively cruder methods:
       1. ``os.startfile`` (Windows-native, works from any thread)
-      2. ``subprocess`` with ``start`` (shell-level fallback)
+      2. ``cmd /c start`` (shell-level fallback)
       3. ``webbrowser.open`` (standard library last resort)
+
+    Also asks Windows to let the browser take the foreground, so the new tab
+    lands in front of ALEX instead of behind it.
     """
+    allow_foreground_for_any_process()
+
     # Method 1: os.startfile (Windows only, most reliable from background threads)
     if hasattr(os, "startfile"):
         try:
@@ -34,22 +39,48 @@ def _open_url(url: str) -> bool:
         except Exception as e:
             log.debug(f"os.startfile failed: {e}")
 
-    # Method 2: subprocess 'start' command (Windows)
+    # Method 2: cmd's start. The empty "" is the window-title argument — without
+    # it, start treats a quoted URL as the title and opens nothing.
     try:
-        subprocess.Popen(["start", url], shell=True)
-        log.info(f"🌐 Opened URL (subprocess): {url}")
+        subprocess.Popen(["cmd", "/c", "start", "", url], shell=False)
+        log.info(f"🌐 Opened URL (cmd start): {url}")
         return True
     except Exception as e:
-        log.debug(f"subprocess start failed: {e}")
+        log.debug(f"cmd start failed: {e}")
 
     # Method 3: webbrowser (may silently fail from threads)
     try:
-        webbrowser.open(url)
-        log.info(f"🌐 Opened URL (webbrowser): {url}")
-        return True
+        if webbrowser.open(url):
+            log.info(f"🌐 Opened URL (webbrowser): {url}")
+            return True
+        log.error(f"webbrowser.open returned False for {url}")
+        return False
     except Exception as e:
         log.error(f"All browser methods failed for {url}: {e}")
         return False
+
+
+# Backwards-compatible alias for the previous private name
+_open_url = open_url
+
+
+def _page_hint(url: str) -> str:
+    """A title fragment to look for when raising the browser, from the host."""
+    try:
+        host = urlparse(url).netloc.lower()
+    except Exception:
+        return ""
+    host = host.removeprefix("www.")
+    known = {
+        "youtube.com": "YouTube",
+        "youtu.be": "YouTube",
+        "google.com": "Google",
+        "github.com": "GitHub",
+        "duckduckgo.com": "DuckDuckGo",
+    }
+    if host in known:
+        return known[host]
+    return host.split(".")[0].title() if host else ""
 
 
 @tool(
@@ -98,8 +129,8 @@ def web_search(params: dict) -> ToolResult:
 
         if not results:
             # Open browser as fallback
-            _open_url(f"https://duckduckgo.com/?q={quote_plus(query)}")
-            focus_window("DuckDuckGo", timeout=3.0)
+            open_url(f"https://duckduckgo.com/?q={quote_plus(query)}")
+            focus_browser("DuckDuckGo")
             return ToolResult(
                 success=True,
                 message=f"Opened DuckDuckGo search for: {query}",
@@ -126,8 +157,8 @@ def web_search(params: dict) -> ToolResult:
         log.error(f"Web search failed: {e}")
         # Fallback to browser
         try:
-            _open_url(f"https://duckduckgo.com/?q={quote_plus(query)}")
-            focus_window("DuckDuckGo", timeout=3.0)
+            open_url(f"https://duckduckgo.com/?q={quote_plus(query)}")
+            focus_browser("DuckDuckGo")
             return ToolResult(
                 success=True,
                 message=f"Opened search in browser for: {query}",
@@ -139,12 +170,16 @@ def web_search(params: dict) -> ToolResult:
 
 @tool(
     name="web_open",
-    description="Open a URL in the default web browser",
+    description=(
+        "Open a web page in the browser. Use for opening a site by name or URL. "
+        "To play or search a video, prefer youtube_play or youtube_search."
+    ),
     parameters={
         "url": {"type": "string", "description": "The URL to open", "required": True},
-        "focus_title": {"type": "string", "description": "Optional title substring to bring the browser to front (e.g., 'YouTube')", "required": False},
+        "focus": {"type": "boolean", "description": "Bring the browser to the front (default true)", "required": False},
     },
     category="web",
+    examples=["web_open({'url': 'https://github.com'})"],
 )
 def web_open(params: dict) -> ToolResult:
     url = params.get("url", "")
@@ -155,12 +190,14 @@ def web_open(params: dict) -> ToolResult:
         url = "https://" + url
 
     try:
-        _open_url(url)
-        
-        focus_title = params.get("focus_title")
-        if focus_title:
-            focus_window(focus_title, timeout=3.0)
-            
+        if not open_url(url):
+            return ToolResult(success=False, error=f"Couldn't open {url} in a browser")
+
+        # Focus by default. The LLM never remembered to ask for it, which is
+        # why tabs kept opening behind the ALEX window.
+        if params.get("focus", True):
+            focus_browser(_page_hint(url))
+
         return ToolResult(success=True, message=f"Opened {url} in your browser")
     except Exception as e:
         return ToolResult(success=False, error=str(e))
@@ -223,47 +260,4 @@ def web_scrape(params: dict) -> ToolResult:
 
     except Exception as e:
         return ToolResult(success=False, error=f"Failed to fetch {url}: {e}")
-
-@tool(
-    name="youtube_play",
-    description="Search and play a video on YouTube",
-    parameters={
-        "query": {"type": "string", "description": "The search query for the YouTube video", "required": True},
-    },
-    category="web",
-)
-def youtube_play(params: dict) -> ToolResult:
-    import re
-    query = params.get("query", "")
-    if not query:
-        return ToolResult(success=False, error="No search query provided")
-
-    search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-
-    try:
-        resp = requests.get(search_url, timeout=10, headers=headers)
-        resp.raise_for_status()
-        
-        # Look for the first video ID
-        match = re.search(r'href="/watch\?v=([^"]+)"', resp.text)
-        if match:
-            video_id = match.group(1).split("&")[0]  # strip extra query params
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
-            
-            _open_url(video_url)
-            focus_window("YouTube", timeout=3.0)
-            
-            log.info(f"▶️ Playing YouTube video: {video_url}")
-            return ToolResult(success=True, message=f"Playing '{query}' on YouTube...")
-            
-    except Exception as e:
-        log.warning(f"Failed to scrape YouTube for '{query}': {e}")
-        
-    # Fallback to search results page
-    _open_url(search_url)
-    focus_window("YouTube", timeout=3.0)
-    return ToolResult(success=True, message=f"Opened YouTube search for '{query}'")
 

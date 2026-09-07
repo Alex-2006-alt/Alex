@@ -193,6 +193,15 @@ class ToolRegistry:
             "run_code": "code_run",
             "run_command": "shell_run",
             "send_email": "email_send",
+            # YouTube — names the model reaches for instead of the real ones
+            "play_youtube": "youtube_play",
+            "youtube": "youtube_play",
+            "play_video": "youtube_play",
+            "play_song": "youtube_play",
+            "play_music": "youtube_play",
+            "search_youtube": "youtube_search",
+            "youtube_search_and_play": "youtube_play",
+            "control_youtube": "youtube_control",
         }
         canonical = aliases.get(name, name)
         return self._tools.get(canonical)

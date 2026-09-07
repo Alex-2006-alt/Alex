@@ -49,6 +49,59 @@ class TestParseResponse:
         assert brain._parse_response(raw)["params"] == {}
 
 
+class TestUnfulfilledPromiseRepair:
+    """
+    Under load the model returns "Opening YouTube for you!" with no action
+    block, so Alex claims to have acted when nothing happened.
+    """
+
+    def test_response_with_an_action_is_left_alone(self, brain):
+        result = {"response": "Opening YouTube!", "action": "web_open", "params": {}}
+        assert brain._repair_unfulfilled_promise("p", dict(result)) == result
+
+    def test_plain_conversation_is_left_alone(self, brain):
+        result = {"response": "I'm doing great, thanks!", "action": None, "params": None}
+        assert brain._repair_unfulfilled_promise("p", dict(result)) == result
+
+    @pytest.mark.parametrize("text", [
+        "Opening YouTube for you.",
+        "Sure thing! Popping open Chrome.",
+        "Playing that song now.",
+        "Launching the app.",
+        "Taking a screenshot for you.",
+    ])
+    def test_promises_are_detected(self, brain, text):
+        assert brain._PROMISE_RE.search(text) is not None
+
+    def test_retry_that_produces_an_action_is_used(self, brain, monkeypatch):
+        monkeypatch.setattr(
+            brain, "_raw_llm_call_with_history",
+            lambda prompt: 'Opening it!\n```action\n{"action": "web_open", "params": {"url": "https://x.com"}}\n```',
+        )
+        repaired = brain._repair_unfulfilled_promise(
+            "open x", {"response": "Opening X for you.", "action": None, "params": None}
+        )
+        assert repaired["action"] == "web_open"
+
+    def test_unrecoverable_promise_becomes_an_honest_answer(self, brain, monkeypatch):
+        monkeypatch.setattr(brain, "_raw_llm_call_with_history", lambda prompt: "Opening it now!")
+        repaired = brain._repair_unfulfilled_promise(
+            "open x", {"response": "Opening X for you.", "action": None, "params": None}
+        )
+        assert repaired["action"] is None
+        assert "couldn't actually carry it out" in repaired["response"]
+
+    def test_a_failing_retry_still_produces_an_honest_answer(self, brain, monkeypatch):
+        def boom(prompt):
+            raise RuntimeError("provider down")
+
+        monkeypatch.setattr(brain, "_raw_llm_call_with_history", boom)
+        repaired = brain._repair_unfulfilled_promise(
+            "open x", {"response": "Opening X for you.", "action": None, "params": None}
+        )
+        assert "couldn't actually carry it out" in repaired["response"]
+
+
 class TestResolveParams:
     """{{step_N.result}} substitution — without it, depends_on only sequences."""
 

@@ -299,11 +299,65 @@ RULES:
                 log.warning("LLM returned an empty response after parsing")
                 result["response"] = "I'm sorry, I couldn't process that properly. Could you try rephrasing?"
 
+            # Guard against Alex claiming to have done something it didn't.
+            # Under load the model often returns "Opening YouTube for you!" with
+            # no action block at all, which reads as a silent failure.
+            result = self._repair_unfulfilled_promise(enriched_input, result)
+
             log.info(f"⚡ Fast path: action={result.get('action')}")
             return result
         except Exception as e:
             log.error(f"Fast think error: {e}")
             return {"response": f"Sorry, I had trouble with that. ({str(e)[:100]})", "action": None, "params": None}
+
+    # Phrases that promise an action is under way. If one of these shows up
+    # with no action block, Alex is about to claim it did something it didn't.
+    _PROMISE_RE = re.compile(
+        r"\b(opening|open(?:s|ed)? up|launching|playing|putting on|starting|"
+        r"firing up|pulling up|popping open|searching for|looking that up|"
+        r"taking a screenshot|shutting down|sending)\b",
+        re.IGNORECASE,
+    )
+
+    def _repair_unfulfilled_promise(self, prompt: str, result: dict) -> dict:
+        """
+        Catch responses that promise an action but carry no action block.
+
+        Retries once with an explicit instruction to emit the block. If the
+        model still won't, rewrite the response so Alex admits it rather than
+        cheerfully reporting success it never achieved.
+        """
+        if result.get("action"):
+            return result
+
+        response = result.get("response", "")
+        if not self._PROMISE_RE.search(response):
+            return result
+
+        log.warning(f"⚠️ Response promises an action but none was parsed: \"{response[:70]}\"")
+
+        nudge = (
+            f"{prompt}\n\n"
+            "IMPORTANT: your previous reply said you were performing an action but "
+            "contained no ```action``` block, so nothing happened. Reply again and "
+            "include the ```action``` block with the correct tool name and params. "
+            "If no tool applies, say so plainly instead of implying you acted."
+        )
+
+        try:
+            retry = self._parse_response(self._raw_llm_call_with_history(nudge))
+            if retry.get("action"):
+                log.info(f"✅ Recovered missing action on retry: {retry['action']}")
+                return retry
+        except Exception as e:
+            log.warning(f"Action-repair retry failed: {e}")
+
+        log.warning("Could not recover an action — telling the user honestly")
+        result["response"] = (
+            "Sorry — I said I'd do that but I couldn't actually carry it out. "
+            "My AI backend didn't give me a usable command. Could you try again?"
+        )
+        return result
 
     # ─── AGENTIC PATH ────────────────────────────────────────────────────────
 

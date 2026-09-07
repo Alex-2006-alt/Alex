@@ -62,6 +62,39 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ============ BACKEND API ============
+// Consecutive transport failures before we admit the backend is gone. One
+// blip shouldn't flip the HUD; a stopped server should.
+let _apiFailureStreak = 0;
+const API_FAILURES_BEFORE_OFFLINE = 3;
+
+// Only announce a reconnection if we actually reported a disconnection first —
+// otherwise the very first successful poll on page load reads as a "reconnect".
+let _reportedOffline = false;
+
+function markBackendOffline() {
+    if (!state.backendConnected) return;
+    state.backendConnected = false;
+    _reportedOffline = true;
+    if (dom.systemStatus) {
+        dom.systemStatus.textContent = 'OFFLINE';
+        dom.systemStatus.className = 'hud-value status-offline';
+    }
+    setState('standby');
+    addMessage('SYSTEM', 'Lost contact with the backend. Restart it with: python main.py --server', 'error-msg');
+}
+
+function markBackendOnline() {
+    _apiFailureStreak = 0;
+    if (!_reportedOffline) return;   // startup is handled by checkBackendConnection
+    _reportedOffline = false;
+    state.backendConnected = true;
+    if (dom.systemStatus) {
+        dom.systemStatus.textContent = 'ONLINE';
+        dom.systemStatus.className = 'hud-value status-online';
+    }
+    addMessage('SYSTEM', 'Backend reconnected.', 'system-msg');
+}
+
 async function apiCall(endpoint, method = 'GET', body = null) {
     try {
         const opts = {
@@ -71,10 +104,29 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         if (body) opts.body = JSON.stringify(body);
 
         const res = await fetch(`${state.apiBase}${endpoint}`, opts);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
+
+        // The server sends a useful JSON body on 4xx/5xx too — for /api/chat it
+        // carries the message meant for the user. Throwing it away turned a
+        // real error into a useless "No response from backend."
+        let data = null;
+        try { data = await res.json(); } catch (_) { /* empty or non-JSON body */ }
+
+        markBackendOnline();
+
+        if (!res.ok) {
+            console.warn(`API ${endpoint} → HTTP ${res.status}`);
+            return data && (data.response || data.error)
+                ? data
+                : { error: `HTTP ${res.status}` };
+        }
+        return data;
     } catch (err) {
-        console.warn(`API call failed (${endpoint}):`, err.message);
+        // Transport-level failure: server down, DNS, CORS
+        _apiFailureStreak++;
+        if (_apiFailureStreak === API_FAILURES_BEFORE_OFFLINE) {
+            console.warn(`API unreachable (${endpoint}): ${err.message}`);
+            markBackendOffline();
+        }
         return null;
     }
 }
@@ -415,6 +467,10 @@ async function sendCommand(text) {
                     addMessage('SYSTEM', `Tool Executed: ${data.action}`, 'system-msg');
                 }
 
+                // Show the multi-step plan, if this was an agentic request.
+                // renderPlan() existed but nothing ever called it.
+                if (data.plan) renderPlan(data.plan);
+
                 // Speak response via Web SpeechSynthesis
                 speakText(data.response);
 
@@ -682,22 +738,35 @@ function initWebSpeech() {
 }
 
 function speakText(text) {
-    if (!('speechSynthesis' in window)) return;
+    // Every path must land on standby. Previously the early returns here left
+    // the orb spinning on PROCESSING forever whenever speech was unavailable.
+    if (!('speechSynthesis' in window)) { setState('standby'); return; }
+
     try {
         window.speechSynthesis.cancel();
         const cleanText = text.replace(/[*_~`#]/g, '').trim();
-        if (!cleanText) return;
+        if (!cleanText) { setState('standby'); return; }
 
         const utterance = new SpeechSynthesisUtterance(cleanText);
         utterance.rate = 1.05;
 
+        let settled = false;
+        const settle = () => { if (!settled) { settled = true; setState('standby'); } };
+
         utterance.onstart = () => setState('speaking');
-        utterance.onend = () => setState('standby');
-        utterance.onerror = () => setState('standby');
+        utterance.onend = settle;
+        utterance.onerror = settle;
 
         window.speechSynthesis.speak(utterance);
+
+        // Browsers block speech until the page has had a user gesture, and in
+        // that case neither onstart nor onerror fires. Don't strand the UI.
+        setTimeout(() => {
+            if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) settle();
+        }, 1200);
     } catch (e) {
         console.warn("SpeechSynthesis error:", e);
+        setState('standby');
     }
 }
 
@@ -827,6 +896,8 @@ function renderPlan(plan) {
     const planSteps = document.getElementById('planSteps');
     const planSummary = document.getElementById('planSummary');
 
+    if (!drawer || !goalText || !planSteps || !planSummary) return;
+
     goalText.textContent = plan.goal ? plan.goal.substring(0, 60) : 'ACTIVE PLAN';
     planSummary.textContent = plan.summary || `${plan.steps.length} steps`;
 
@@ -834,14 +905,14 @@ function renderPlan(plan) {
     const statusClass = { done: 'step-done', running: 'step-running', failed: 'step-failed', pending: 'step-pending', skipped: 'step-skipped' };
 
     planSteps.innerHTML = plan.steps.map(step => `
-        <div class="plan-step ${statusClass[step.status] || 'step-pending'}" id="step-${step.id}">
+        <div class="plan-step ${statusClass[step.status] || 'step-pending'}" id="step-${escapeHtml(String(step.id))}">
             <div class="step-header">
                 <span class="step-status-icon">${statusEmoji[step.status] || '⏳'}</span>
-                <span class="step-num">STEP ${step.id}</span>
-                <span class="step-action">${step.action}</span>
-                ${step.duration ? `<span class="step-duration">${step.duration}s</span>` : ''}
+                <span class="step-num">STEP ${escapeHtml(String(step.id))}</span>
+                <span class="step-action">${escapeHtml(String(step.action || ''))}</span>
+                ${step.duration ? `<span class="step-duration">${escapeHtml(String(step.duration))}s</span>` : ''}
             </div>
-            <div class="step-desc">${step.description || ''}</div>
+            <div class="step-desc">${escapeHtml(String(step.description || ''))}</div>
             ${step.result ? `<div class="step-result">${escapeHtml(String(step.result).substring(0, 120))}</div>` : ''}
             ${step.error ? `<div class="step-error">⚠️ ${escapeHtml(step.error)}</div>` : ''}
         </div>
@@ -1009,6 +1080,13 @@ function refreshSideContent() {
 
 // ============ POLLING (when backend connected) ============
 function startPolling() {
+    // Reconnect probe. Every other loop bails out while disconnected, so
+    // without this the UI would stay OFFLINE forever once the backend blipped.
+    setInterval(async () => {
+        if (state.backendConnected) return;
+        await apiCall('/api/status');   // a success flips us back online
+    }, 5000);
+
     // Confirmations are blocking a request while they sit unanswered, so
     // they get their own faster loop.
     setInterval(pollConfirmations, 1500);
@@ -1017,7 +1095,12 @@ function startPolling() {
     setInterval(async () => {
         if (!state.backendConnected) return;
 
-
+        // Live plan progress. /api/plan reports the plan currently executing,
+        // so steps tick over as they run instead of appearing all at once.
+        const planData = await apiCall('/api/plan');
+        if (planData && planData.steps && planData.steps.length) {
+            renderPlan(planData);
+        }
 
         // Refresh side panel if open
         if (_sidePanelOpen) {
