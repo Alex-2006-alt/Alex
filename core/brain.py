@@ -900,17 +900,35 @@ RULES:
         """Parse LLM response to extract action JSON from action block."""
         result = {"response": raw_response, "action": None, "params": None}
 
-        action_pattern = r"```action\s*\n(.*?)```"
+        action_pattern = r"```(?:action|json)?\s*\n(.*?)```"
         match = re.search(action_pattern, raw_response, re.DOTALL)
 
         if match:
+            json_str = match.group(1).strip()
             try:
-                action_json = json.loads(match.group(1).strip())
+                action_json = json.loads(json_str)
                 result["action"] = action_json.get("action")
                 result["params"] = action_json.get("params", {})
                 result["response"] = re.sub(action_pattern, "", raw_response, flags=re.DOTALL).strip()
             except json.JSONDecodeError as e:
-                log.warning(f"Failed to parse action JSON: {e}")
+                log.warning(f"Failed to parse full action JSON, trying to extract first object: {e}")
+                start_idx = json_str.find('{')
+                if start_idx != -1:
+                    depth = 0
+                    for i in range(start_idx, len(json_str)):
+                        if json_str[i] == '{':
+                            depth += 1
+                        elif json_str[i] == '}':
+                            depth -= 1
+                            if depth == 0:
+                                try:
+                                    action_json = json.loads(json_str[start_idx:i+1])
+                                    result["action"] = action_json.get("action")
+                                    result["params"] = action_json.get("params", {})
+                                    result["response"] = re.sub(action_pattern, "", raw_response, flags=re.DOTALL).strip()
+                                except json.JSONDecodeError:
+                                    pass
+                                break
 
         return result
 

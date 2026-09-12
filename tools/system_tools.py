@@ -69,7 +69,7 @@ def app_open(params: dict) -> ToolResult:
     except Exception:
         try:
             allow_foreground_for_any_process()
-            subprocess.Popen(app_path, shell=True)
+            subprocess.Popen(app_path)
             threading.Thread(target=post_launch, daemon=True).start()
             return ToolResult(success=True, message=f"Launched {name}")
         except Exception as e:

@@ -203,6 +203,7 @@ class ToolRegistry:
             # YouTube — names the model reaches for instead of the real ones
             "play_youtube": "youtube_play",
             "youtube": "youtube_play",
+            "yt": "youtube_play",
             "play_video": "youtube_play",
             "play_song": "youtube_play",
             "play_music": "youtube_play",
