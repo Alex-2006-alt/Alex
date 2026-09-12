@@ -11,8 +11,8 @@ from utils.logger import log
     name="memory_store",
     description="Explicitly save an important fact about the user (e.g., name, preference, background) to long-term memory so you don't forget it.",
     parameters={
-        "key": "A short, unique identifier for the fact (e.g., 'user_favorite_drink', 'user_location', 'partner_name')",
-        "value": "The fact to remember (e.g., 'Coffee', 'New York', 'Sarah')"
+        "key": {"type": "str", "description": "A short, unique identifier for the fact (e.g., 'user_favorite_drink', 'user_location', 'partner_name')", "required": True},
+        "value": {"type": "str", "description": "The fact to remember (e.g., 'Coffee', 'New York', 'Sarah')", "required": True}
     },
     safety=SafetyLevel.SAFE,
     examples=[
@@ -39,7 +39,7 @@ def memory_store(params: dict) -> str:
     name="memory_forget",
     description="Delete a previously stored fact from long-term memory.",
     parameters={
-        "key": "The exact key of the fact to forget (e.g., 'user_location')"
+        "key": {"type": "str", "description": "The exact key of the fact to forget (e.g., 'user_location')", "required": True}
     },
     safety=SafetyLevel.SAFE,
     examples=[

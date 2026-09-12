@@ -61,8 +61,15 @@ class ToolSpec:
         """Format tool for inclusion in an LLM prompt."""
         param_lines = []
         for pname, pmeta in self.parameters.items():
-            req = "required" if pmeta.get("required", False) else "optional"
-            param_lines.append(f"    - {pname} ({pmeta.get('type', 'str')}, {req}): {pmeta.get('description', '')}")
+            if isinstance(pmeta, dict):
+                req = "required" if pmeta.get("required", False) else "optional"
+                ptype = pmeta.get("type", "str")
+                pdesc = pmeta.get("description", "")
+            else:
+                req = "optional"
+                ptype = "str"
+                pdesc = str(pmeta)
+            param_lines.append(f"    - {pname} ({ptype}, {req}): {pdesc}")
 
         params_str = "\n".join(param_lines) if param_lines else "    (no parameters)"
         safety_note = f" ⚠️ REQUIRES CONFIRMATION" if self.safety == SafetyLevel.CONFIRM else ""

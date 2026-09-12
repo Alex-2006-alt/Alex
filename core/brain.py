@@ -265,6 +265,9 @@ RULES:
         if len(self.conversation_history) > max_messages:
             self.conversation_history = self.conversation_history[-max_messages:]
 
+        # Trigger background learning (non-blocking)
+        self._trigger_background_learning(user_input, result.get("response", ""))
+
         log.info(f"💡 Response: \"{str(result.get('response', ''))[:80]}\"")
         return result
 
@@ -280,9 +283,30 @@ RULES:
         self._planner = Planner(
             llm_caller=self._raw_llm_call,
             tool_registry=self._tool_registry,
+            memory=self._memory,
         )
         for cb in self._plan_listeners:
             self._planner.add_plan_listener(cb)
+
+    def _trigger_background_learning(self, user_input: str, assistant_response: str):
+        """
+        Kick off the unified learning system in a background thread.
+        Uses the local LLM to extract facts, corrections, and preferences
+        from the conversation turn. Never blocks the main response.
+        """
+        if not self._memory:
+            return
+        if not user_input or len(user_input.strip()) < 3:
+            return
+
+        try:
+            self._memory.learn_from_interaction(
+                user_text=user_input,
+                assistant_text=assistant_response,
+                llm_caller=self._raw_llm_call,
+            )
+        except Exception as e:
+            log.debug(f"Background learning trigger failed: {e}")
 
     # ─── FAST PATH ───────────────────────────────────────────────────────────
 
@@ -485,6 +509,14 @@ RULES:
                 steps=[s.to_dict() for s in plan.steps],
                 result=final_response,
             )
+            # Workflow learning: save successful plans for future reuse
+            if plan.status == "done" and not plan.has_failures():
+                self._memory.save_learned_workflow(
+                    goal=user_input,
+                    steps=[s.to_dict() for s in plan.steps],
+                )
+            elif plan.has_failures():
+                self._memory.mark_workflow_failed(user_input)
 
         return {
             "response": final_response,

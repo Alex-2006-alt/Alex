@@ -27,14 +27,23 @@ def app_open(params: dict) -> ToolResult:
         return ToolResult(success=False, error="No app name provided")
 
     # Check registry
-    app_path = config.DEFAULT_APP_REGISTRY.get(name, name)
+    app_path = str(config.DEFAULT_APP_REGISTRY.get(name, name))
 
     import threading
-    from utils.window_utils import focus_window
+    from utils.window_utils import focus_window, allow_foreground_for_any_process
 
     def post_launch():
+        # Map common command names to actual window title substrings
+        window_title_map = {
+            "vscode": "visual studio code",
+            "vs code": "visual studio code",
+            "chrome": "google chrome",
+            "edge": "microsoft edge",
+        }
+        search_name = str(window_title_map.get(name, name))
+        
         # Wait up to 5s for the window to appear and bring it to foreground
-        focus_window(name, timeout=5.0)
+        focus_window(search_name, timeout=5.0)
         
         import sys
         # Launch companion widget
@@ -46,17 +55,20 @@ def app_open(params: dict) -> ToolResult:
             python_exe = python_exe.replace("python.exe", "pythonw.exe")
             
         try:
-            subprocess.Popen([python_exe, companion_script, "--app", name], creationflags=subprocess.CREATE_NO_WINDOW)
+            # We don't need CREATE_NO_WINDOW when using pythonw.exe, and it can sometimes hide GUI windows
+            subprocess.Popen([python_exe, companion_script, "--app", name])
         except Exception as e:
             log.error(f"Failed to launch companion widget: {e}")
 
     try:
+        allow_foreground_for_any_process()
         os.startfile(app_path)
         log.info(f"🚀 Opened app: {name}")
         threading.Thread(target=post_launch, daemon=True).start()
         return ToolResult(success=True, message=f"Opening {name}...")
     except Exception:
         try:
+            allow_foreground_for_any_process()
             subprocess.Popen(app_path, shell=True)
             threading.Thread(target=post_launch, daemon=True).start()
             return ToolResult(success=True, message=f"Launched {name}")
@@ -197,27 +209,27 @@ def system_volume(params: dict) -> ToolResult:
         import ctypes
 
         devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)  # type: ignore
         volume = ctypes.cast(interface, ctypes.POINTER(IAudioEndpointVolume))
 
-        current = int(volume.GetMasterVolumeLevelScalar() * 100)
+        current = int(volume.GetMasterVolumeLevelScalar() * 100)  # type: ignore
 
         if action == "mute":
-            volume.SetMute(1, None)
+            volume.SetMute(1, None)  # type: ignore
             return ToolResult(success=True, message="Volume muted")
         elif action == "unmute":
-            volume.SetMute(0, None)
+            volume.SetMute(0, None)  # type: ignore
             return ToolResult(success=True, message="Volume unmuted")
         elif action == "up":
             new_level = min(100, current + amount)
-            volume.SetMasterVolumeLevelScalar(new_level / 100.0, None)
+            volume.SetMasterVolumeLevelScalar(new_level / 100.0, None)  # type: ignore
             return ToolResult(success=True, message=f"Volume increased to {new_level}%")
         elif action == "down":
             new_level = max(0, current - amount)
-            volume.SetMasterVolumeLevelScalar(new_level / 100.0, None)
+            volume.SetMasterVolumeLevelScalar(new_level / 100.0, None)  # type: ignore
             return ToolResult(success=True, message=f"Volume decreased to {new_level}%")
         elif action == "set":
-            volume.SetMasterVolumeLevelScalar(amount / 100.0, None)
+            volume.SetMasterVolumeLevelScalar(amount / 100.0, None)  # type: ignore
             return ToolResult(success=True, message=f"Volume set to {amount}%")
 
         return ToolResult(success=False, error=f"Unknown volume action: {action}")

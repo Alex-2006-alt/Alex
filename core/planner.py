@@ -184,14 +184,16 @@ Return ONLY a JSON object:
 }}
 """
 
-    def __init__(self, llm_caller: Callable, tool_registry=None):
+    def __init__(self, llm_caller: Callable, tool_registry=None, memory=None):
         """
         Args:
             llm_caller: Function that takes a prompt string and returns response string
             tool_registry: ToolRegistry instance with available tools
+            memory: LongTermMemory instance for workflow learning
         """
         self.llm_caller = llm_caller
         self.tool_registry = tool_registry
+        self.memory = memory
         self.current_plan: Plan | None = None
         self._plan_listeners: list[Callable] = []
 
@@ -253,10 +255,16 @@ Return ONLY a JSON object:
     def create_plan(self, goal: str, context: str = "", previous_results: str = "") -> Plan | None:
         """
         Ask the LLM to create a step-by-step plan for the given goal.
+        First checks for a previously learned workflow that matches.
 
         Returns:
             Plan object, or None if no planning needed (simple task)
         """
+        # Check for a learned workflow first (instant replay)
+        learned = self._try_learned_workflow(goal)
+        if learned:
+            return learned
+
         tool_descriptions = self._get_tool_descriptions()
 
         prompt = self.PLAN_PROMPT_TEMPLATE.format(
@@ -305,6 +313,49 @@ Return ONLY a JSON object:
         except Exception as e:
             log.error(f"Planning failed: {e}")
             return None
+
+    def _try_learned_workflow(self, goal: str) -> Plan | None:
+        """
+        Check if a previously learned workflow matches this goal.
+        Returns a Plan built from the cached workflow, or None.
+        """
+        if not self.memory:
+            return None
+
+        try:
+            workflow = self.memory.find_learned_workflow(goal, min_successes=2)
+        except Exception as e:
+            log.debug(f"Workflow lookup failed: {e}")
+            return None
+
+        if not workflow:
+            return None
+
+        log.info(
+            f"⚡ Replaying learned workflow (success ×{workflow['success_count']}): "
+            f"{workflow['goal_pattern'][:60]}"
+        )
+
+        steps = []
+        for s in workflow["steps"][:config.MAX_AGENT_STEPS]:
+            steps.append(Step(
+                id=s.get("id", len(steps) + 1),
+                action=s.get("action", ""),
+                params=s.get("params", {}),
+                description=s.get("description", "(learned)"),
+                depends_on=s.get("depends_on", []),
+            ))
+
+        if not steps:
+            return None
+
+        plan = Plan(goal=goal, steps=steps)
+        self.current_plan = plan
+        self._notify_listeners("plan_created", {
+            **plan.to_dict(),
+            "source": "learned_workflow",
+        })
+        return plan
 
     def reflect(self, plan: Plan) -> dict:
         """

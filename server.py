@@ -32,7 +32,7 @@ _boot_status = {"stage": "starting", "steps": [], "ready": False}
 
 # Seconds to wait on a chat request before calling it slow. Extended
 # automatically while the user has an unanswered confirmation card.
-CHAT_TIMEOUT = 60
+CHAT_TIMEOUT = 180
 
 
 def _get_assistant():
