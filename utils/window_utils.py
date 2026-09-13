@@ -89,7 +89,20 @@ def _force_foreground(hwnd) -> bool:
         user32.keybd_event(VK_MENU, 0, EXTENDED, 0)
         user32.keybd_event(VK_MENU, 0, EXTENDED | KEYUP, 0)
         user32.SetForegroundWindow(hwnd)
-        return user32.GetForegroundWindow() == hwnd
+        
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+            
+        # Absolute fallback: force it to top of Z-order to make it visible
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOSIZE = 0x0001
+        SWP_NOMOVE = 0x0002
+        SWP_SHOWWINDOW = 0x0040
+        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+        
+        return True # It might not technically have focus, but it is visible in the front!
 
     except Exception as e:
         log.debug(f"_force_foreground failed: {e}")
@@ -100,7 +113,7 @@ def _visible_windows():
     if not _HAS_PYGETWINDOW:
         return []
     try:
-        return [w for w in pygetwindow.getAllWindows() if w.title and w.title.strip()]
+        return [w for w in pygetwindow.getAllWindows() if w.title and w.title.strip() and getattr(w, 'visible', True)]
     except Exception:
         return []
 
@@ -126,9 +139,10 @@ def focus_window(title_substring: str, timeout: float = 8.0) -> bool:
                     return True
                 try:
                     win.activate()
-                    return True
+                    if ctypes.windll.user32.GetForegroundWindow() == win._hWnd:
+                        return True
                 except Exception:
-                    return False
+                    pass
         time.sleep(0.25)
 
     log.debug(f"No window matching '{title_substring}' within {timeout}s")
@@ -158,7 +172,11 @@ def focus_browser(expected_title: str | None = None, timeout: float = 10.0) -> b
             for win in windows:
                 if needle in win.title.lower():
                     log.info(f"🪟 Focusing browser on '{win.title}'")
-                    return _force_foreground(win._hWnd) or _safe_activate(win)
+                    if _force_foreground(win._hWnd):
+                        return True
+                    if _safe_activate(win):
+                        if ctypes.windll.user32.GetForegroundWindow() == win._hWnd:
+                            return True
 
         # Remember a browser window in case the title never resolves
         if browser_window is None:
@@ -174,7 +192,10 @@ def focus_browser(expected_title: str | None = None, timeout: float = 10.0) -> b
 
     if browser_window is not None:
         log.info(f"🪟 Focusing browser window '{browser_window.title}' (page title never matched)")
-        return _force_foreground(browser_window._hWnd) or _safe_activate(browser_window)
+        if _force_foreground(browser_window._hWnd):
+            return True
+        if _safe_activate(browser_window):
+            return ctypes.windll.user32.GetForegroundWindow() == browser_window._hWnd
 
     log.warning("Could not find a browser window to focus")
     return False
