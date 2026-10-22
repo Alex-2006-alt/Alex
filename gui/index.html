@@ -311,21 +311,49 @@
 
     <!-- Strategy & Plan Execution Drawer -->
     <aside class="plan-drawer" id="planDrawer">
-        <div class="drawer-header">
-            <div class="plan-drawer-title">
+        <div class="drawer-header" id="planDrawerHeader">
+            <div class="plan-drawer-title" onclick="handleDrawerTitleClick()">
                 <span class="plan-icon">📋</span>
-                <span>STRATEGIC PLAN</span>
+                <span id="planDrawerTitle">STRATEGIC PLAN</span>
+                <span class="plan-min-badge" id="planMinBadge" style="display: none;">0 steps</span>
             </div>
-            <button class="drawer-close-btn" onclick="closePlanDrawer()" title="Close Plan (Esc)">✕</button>
+            <div class="drawer-header-actions">
+                <button class="drawer-action-btn" id="planEditBtn" onclick="togglePlanEditMode()" title="Edit Strategic Plan">✏️ EDIT</button>
+                <button class="drawer-action-btn run-btn" id="planRunBtn" onclick="executeCurrentPlan()" title="Execute Plan">▶ RUN</button>
+                <button class="drawer-action-btn min-btn" id="planMinBtn" onclick="togglePlanMinimize()" title="Minimize / Expand Plan">🗕</button>
+                <button class="drawer-close-btn" onclick="closePlanDrawer()" title="Close Plan (Esc)">✕</button>
+            </div>
         </div>
-        <div class="drawer-body">
-            <div class="plan-goal-card">
-                <div class="plan-label">ACTIVE OBJECTIVE</div>
-                <div class="plan-goal-text" id="planGoalText">No active plan</div>
+        <div class="drawer-body" id="planDrawerBody">
+            <!-- View Mode -->
+            <div id="planViewMode">
+                <div class="plan-goal-card">
+                    <div class="plan-label">ACTIVE OBJECTIVE</div>
+                    <div class="plan-goal-text" id="planGoalText">No active plan</div>
+                </div>
+                <div class="plan-summary-badge" id="planSummary">0 steps</div>
+                <div class="plan-steps-container" id="planSteps">
+                    <div class="plan-empty">Awaiting autonomous plan execution...</div>
+                </div>
             </div>
-            <div class="plan-summary-badge" id="planSummary">0 steps</div>
-            <div class="plan-steps-container" id="planSteps">
-                <div class="plan-empty">Awaiting autonomous plan execution...</div>
+
+            <!-- Edit Mode -->
+            <div id="planEditMode" style="display: none;">
+                <div class="plan-goal-card edit-card">
+                    <label class="plan-label" for="editPlanGoal">ACTIVE OBJECTIVE</label>
+                    <textarea id="editPlanGoal" class="edit-plan-textarea" rows="2" placeholder="Enter plan objective/goal..."></textarea>
+                </div>
+                <div class="edit-steps-header">
+                    <span class="plan-label">STEPS TO EXECUTE</span>
+                    <button type="button" class="small-btn add-step-btn" onclick="addPlanEditStep()">+ ADD STEP</button>
+                </div>
+                <div class="edit-steps-container" id="editPlanSteps">
+                    <!-- Injected dynamically by app.js -->
+                </div>
+                <div class="edit-actions-bar">
+                    <button type="button" class="plan-save-btn" id="planSaveBtn" onclick="savePlanToBackend()">💾 SAVE TO BACKEND</button>
+                    <button type="button" class="plan-cancel-btn" onclick="cancelPlanEdit()">CANCEL</button>
+                </div>
             </div>
         </div>
     </aside>
