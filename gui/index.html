@@ -216,6 +216,8 @@
                 <div class="panel-dot"></div>
                 <span>COMMUNICATION LOG</span>
                 <div class="panel-line"></div>
+                <button class="panel-toggle-btn" id="btnTogglePlan" onclick="togglePlanDrawer()" title="Strategic Plan View">PLAN</button>
+                <button class="panel-toggle-btn" id="btnToggleMemory" onclick="toggleSidePanel()" title="Memory & Tasks Panel (Ctrl+K)">MEMORY</button>
             </div>
 
             <div class="chat-container" id="chatContainer">
@@ -255,11 +257,78 @@
                 <div class="module-chip active" id="modLLM">LLM</div>
                 <div class="module-chip active" id="modWAKE">WAKE</div>
                 <div class="module-chip active" id="modACT">ACT</div>
+                <div class="module-chip active" id="modMEM" title="Memory Core">MEM</div>
             </div>
         </aside>
 
-
     </main>
+
+    <!-- Side Panel Toggle Handle -->
+    <button class="side-panel-toggle" id="sidePanelToggle" onclick="toggleSidePanel()" title="Toggle Knowledge & Tasks Panel (Ctrl+K)">
+        <span id="sidePanelIcon">💾</span>
+    </button>
+
+    <!-- Side Panel (Memory / Tasks / History) -->
+    <aside class="side-panel" id="sidePanel">
+        <div class="side-panel-tabs">
+            <button class="side-tab active" id="tabMemory" onclick="switchSideTab('memory')">MEMORY</button>
+            <button class="side-tab" id="tabTasks" onclick="switchSideTab('tasks')">TASKS</button>
+            <button class="side-tab" id="tabHistory" onclick="switchSideTab('history')">HISTORY</button>
+        </div>
+
+        <!-- Memory Content -->
+        <div class="side-content active" id="contentMemory">
+            <div class="side-content-header">
+                <span>LONG-TERM MEMORY</span>
+                <span class="fact-count" id="factCount">0 facts</span>
+            </div>
+            <div class="facts-list" id="factsList">
+                <div class="facts-empty">No facts stored yet.</div>
+            </div>
+        </div>
+
+        <!-- Tasks Content -->
+        <div class="side-content" id="contentTasks">
+            <div class="side-content-header">
+                <span>BACKGROUND TASKS</span>
+                <button class="small-btn" onclick="cancelAllTasks()">CANCEL ALL</button>
+            </div>
+            <div class="tasks-list" id="tasksList">
+                <div class="tasks-empty">No background tasks running.</div>
+            </div>
+        </div>
+
+        <!-- History Content -->
+        <div class="side-content" id="contentHistory">
+            <div class="side-content-header">
+                <span>TASK HISTORY</span>
+            </div>
+            <div class="history-list" id="historyList">
+                <div class="tasks-empty">No task history yet.</div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Strategy & Plan Execution Drawer -->
+    <aside class="plan-drawer" id="planDrawer">
+        <div class="drawer-header">
+            <div class="plan-drawer-title">
+                <span class="plan-icon">📋</span>
+                <span>STRATEGIC PLAN</span>
+            </div>
+            <button class="drawer-close-btn" onclick="closePlanDrawer()" title="Close Plan (Esc)">✕</button>
+        </div>
+        <div class="drawer-body">
+            <div class="plan-goal-card">
+                <div class="plan-label">ACTIVE OBJECTIVE</div>
+                <div class="plan-goal-text" id="planGoalText">No active plan</div>
+            </div>
+            <div class="plan-summary-badge" id="planSummary">0 steps</div>
+            <div class="plan-steps-container" id="planSteps">
+                <div class="plan-empty">Awaiting autonomous plan execution...</div>
+            </div>
+        </div>
+    </aside>
 
     <!-- Bottom HUD Bar -->
     <footer class="hud-bottom" id="hudBottom">

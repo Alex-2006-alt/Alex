@@ -55,8 +55,9 @@ TTS_RATE = int(os.getenv("TTS_RATE", "175"))        # Words per minute
 TTS_VOLUME = float(os.getenv("TTS_VOLUME", "0.9"))  # 0.0 to 1.0
 
 # ─── AI Brain (LLM) ──────────────────────────────────────────────────────────
-# Provider: "ollama" (local), "gemini" (Google), "openai" (OpenAI), "openrouter" (free/cheap models)
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
+# Provider: "hybrid" (Gemini + Local Qwen simultaneously), "gemini" (Google), "ollama" (local), "openai", "openrouter"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "hybrid")
+DUAL_MODEL_MODE = os.getenv("DUAL_MODEL_MODE", "true").lower() == "true"
 
 # ─── Agentic Mode ─────────────────────────────────────────────────────────────
 # When True, complex multi-step requests use the Planner + ReAct loop
@@ -70,11 +71,14 @@ PARALLEL_STEPS = os.getenv("PARALLEL_STEPS", "true").lower() == "true"  # Parall
 
 # Ollama settings (local LLM)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
 
 # Google Gemini settings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+
+# Hybrid / Dual Model (Gemini + Qwen working simultaneously)
+HYBRID_MODEL = f"{GEMINI_MODEL} + {OLLAMA_MODEL}"
 
 # OpenAI settings
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -101,6 +105,28 @@ LLM_RETRY_DELAY = float(os.getenv("LLM_RETRY_DELAY", "0.5"))       # Base delay 
 # "porcupine" (Picovoice, needs key) or "whisper" (use Whisper, higher CPU)
 WAKE_WORD_ENGINE = os.getenv("WAKE_WORD_ENGINE", "whisper")
 PORCUPINE_ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY", "")
+
+# ─── Screen Vision ────────────────────────────────────────────────────────────
+# Enable Win+Shift+A hotkey → screenshot → ask question by voice
+SCREEN_VISION_ENABLED = os.getenv("SCREEN_VISION_ENABLED", "true").lower() == "true"
+# Global hotkey to trigger the screenshot + voice question pipeline
+SCREEN_HOTKEY = os.getenv("SCREEN_HOTKEY", "windows+shift+a")
+# Default capture mode: "full" | "active_window" | "region"
+SCREEN_CAPTURE_MODE = os.getenv("SCREEN_CAPTURE_MODE", "active_window")
+
+# Vision LLM provider: "gemini" (recommended, free) | "openrouter" | "openai"
+VISION_PROVIDER = os.getenv("VISION_PROVIDER", "gemini")
+# Gemini vision model — gemini-1.5-flash has the best free-tier vision support
+VISION_GEMINI_MODEL = os.getenv("VISION_GEMINI_MODEL", "gemini-1.5-flash")
+# OpenRouter vision model (free tier fallback)
+VISION_OPENROUTER_MODEL = os.getenv(
+    "VISION_OPENROUTER_MODEL",
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
+)
+
+# ─── Background Service / Tray ────────────────────────────────────────────────
+# Run Alex as a system-tray background service (alex_service.pyw)
+ALEX_RUN_IN_TRAY = os.getenv("ALEX_RUN_IN_TRAY", "true").lower() == "true"
 
 # ─── PC Control Settings ─────────────────────────────────────────────────────
 # Safety: require confirmation for these action types

@@ -25,6 +25,7 @@ const dom = {
     orbIcon: $('orbIcon'),
     orbPulse: $('orbPulse'),
     statusText: $('statusText'),
+    chatContainer: $('chatContainer'),
     chatMessages: $('chatMessages'),
     chatInput: $('chatInput'),
     sendBtn: $('sendBtn'),
@@ -49,6 +50,15 @@ const dom = {
     particles: $('particles'),
     btnListen: $('btnListen'),
 };
+
+function scrollChatToBottom() {
+    if (dom.chatContainer) {
+        dom.chatContainer.scrollTop = dom.chatContainer.scrollHeight;
+    }
+    if (dom.chatMessages) {
+        dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    }
+}
 
 // ============ INITIALIZATION ============
 document.addEventListener('DOMContentLoaded', () => {
@@ -80,7 +90,8 @@ function markBackendOffline() {
         dom.systemStatus.className = 'hud-value status-offline';
     }
     setState('standby');
-    addMessage('SYSTEM', 'Lost contact with the backend. Restart it with: python main.py --server', 'error-msg');
+    addMessage('SYSTEM', 'Lost contact with the backend. Restart with: python server.py', 'error-msg');
+    simulateSystemStats();
 }
 
 function markBackendOnline() {
@@ -88,11 +99,13 @@ function markBackendOnline() {
     if (!_reportedOffline) return;   // startup is handled by checkBackendConnection
     _reportedOffline = false;
     state.backendConnected = true;
+    stopSimulatedStats();
     if (dom.systemStatus) {
         dom.systemStatus.textContent = 'ONLINE';
         dom.systemStatus.className = 'hud-value status-online';
     }
     addMessage('SYSTEM', 'Backend reconnected.', 'system-msg');
+    fetchRealStats();
 }
 
 async function apiCall(endpoint, method = 'GET', body = null) {
@@ -131,28 +144,6 @@ async function apiCall(endpoint, method = 'GET', body = null) {
     }
 }
 
-async function checkBackendConnection() {
-    const data = await apiCall('/api/status');
-    if (data && data.status === 'online') {
-        state.backendConnected = true;
-        dom.systemStatus.textContent = 'ONLINE';
-        dom.systemStatus.className = 'hud-value status-online';
-        addMessage('SYSTEM', `Backend connected — ${data.assistant_name} is running with ${data.llm_provider}.`, 'system-msg');
-
-        // Update HUD with real info
-        if (data.llm_model) $('llmProvider').textContent = data.llm_model.toUpperCase();
-        if (data.stt_engine) $('sttEngine').textContent = data.stt_engine;
-        if (data.tts_engine) $('ttsEngine').textContent = data.tts_engine;
-
-        // Start polling real system stats
-        fetchRealStats();
-        setInterval(fetchRealStats, 5000);
-    } else {
-        state.backendConnected = false;
-        addMessage('SYSTEM', 'Running in demo mode — no backend connected. Launch with: python main.py --server', 'system-msg');
-        simulateSystemStats();
-    }
-}
 
 async function fetchRealStats() {
     const stats = await apiCall('/api/stats');
@@ -249,18 +240,25 @@ function initParticles() {
 // ============ WAVEFORM VISUALIZER ============
 function initWaveform() {
     const canvas = dom.waveformCanvas;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
 
-    // High-DPI support
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
-
-    const W = rect.width;
-    const H = rect.height;
+    let W = 600;
+    let H = 80;
     let phase = 0;
+
+    function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        W = rect.width || 600;
+        H = rect.height || 80;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    resize();
+    window.addEventListener('resize', resize);
 
     function draw() {
         ctx.clearRect(0, 0, W, H);
@@ -327,10 +325,10 @@ function addMessage(sender, text, className = 'system-msg') {
     `;
 
     dom.chatMessages.appendChild(msg);
-    dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    scrollChatToBottom();
 
     state.sessionMessages++;
-    dom.sessionMsgs.textContent = `${state.sessionMessages} MSGS`;
+    if (dom.sessionMsgs) dom.sessionMsgs.textContent = `${state.sessionMessages} MSGS`;
 }
 
 function addTypingIndicator() {
@@ -349,7 +347,7 @@ function addTypingIndicator() {
         </div>
     `;
     dom.chatMessages.appendChild(indicator);
-    dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    scrollChatToBottom();
 }
 
 function removeTypingIndicator() {
@@ -358,8 +356,9 @@ function removeTypingIndicator() {
 }
 
 function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = String(text);
     return div.innerHTML;
 }
 
@@ -398,7 +397,7 @@ function renderConfirmation(item) {
     card.querySelector('.confirm-deny').addEventListener('click', () => answerConfirmation(item.id, false));
 
     dom.chatMessages.appendChild(card);
-    dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    scrollChatToBottom();
     _confirmCards.set(item.id, card);
 }
 
@@ -738,8 +737,7 @@ function initWebSpeech() {
 }
 
 function speakText(text) {
-    // Every path must land on standby. Previously the early returns here left
-    // the orb spinning on PROCESSING forever whenever speech was unavailable.
+    // Every path must land on standby.
     if (!('speechSynthesis' in window)) { setState('standby'); return; }
 
     try {
@@ -749,6 +747,12 @@ function speakText(text) {
 
         const utterance = new SpeechSynthesisUtterance(cleanText);
         utterance.rate = 1.05;
+        utterance.lang = 'en-US';
+        const voices = window.speechSynthesis.getVoices();
+        if (voices && voices.length) {
+            const preferred = voices.find(v => (v.lang === 'en-US' || v.lang.startsWith('en')) && (v.name.includes('Natural') || v.name.includes('David') || v.name.includes('Google') || v.name.includes('Guy') || v.name.includes('Mark')));
+            if (preferred) utterance.voice = preferred;
+        }
 
         let settled = false;
         const settle = () => { if (!settled) { settled = true; setState('standby'); } };
@@ -759,8 +763,7 @@ function speakText(text) {
 
         window.speechSynthesis.speak(utterance);
 
-        // Browsers block speech until the page has had a user gesture, and in
-        // that case neither onstart nor onerror fires. Don't strand the UI.
+        // Browsers block speech until the page has had a user gesture
         setTimeout(() => {
             if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) settle();
         }, 1200);
@@ -817,9 +820,15 @@ function toggleListening() {
         if (recognition) {
             try {
                 recognition.start();
+                setState('listening');
             } catch (err) {
                 console.warn("Recognition start failed:", err);
-                setState('listening');
+                if (err.name === 'InvalidStateError') {
+                    setState('listening');
+                } else {
+                    setState('standby');
+                    addMessage('SYSTEM', `Microphone could not start: ${err.message || err}`, 'error-msg');
+                }
             }
         } else {
             setState('listening');
@@ -840,50 +849,68 @@ function showSearchModal() {
 }
 
 // ============ SYSTEM STATS SIMULATION (demo mode) ============
+let _simStatsInterval = null;
+
 function simulateSystemStats() {
+    stopSimulatedStats();
+
     function updateStats() {
+        if (state.backendConnected) {
+            stopSimulatedStats();
+            return;
+        }
         const cpu = 15 + Math.floor(Math.random() * 60);
-        dom.cpuBar.style.width = `${cpu}%`;
-        dom.cpuValue.textContent = cpu;
+        if (dom.cpuBar) dom.cpuBar.style.width = `${cpu}%`;
+        if (dom.cpuValue) dom.cpuValue.textContent = cpu;
 
         const ram = 50 + Math.floor(Math.random() * 30);
         const total = 16;
         const used = (total * ram / 100).toFixed(1);
-        dom.ramBar.style.width = `${ram}%`;
-        dom.ramValue.textContent = ram;
-        dom.ramUsed.textContent = used;
-        dom.ramTotal.textContent = total.toFixed(1);
+        if (dom.ramBar) dom.ramBar.style.width = `${ram}%`;
+        if (dom.ramValue) dom.ramValue.textContent = ram;
+        if (dom.ramUsed) dom.ramUsed.textContent = used;
+        if (dom.ramTotal) dom.ramTotal.textContent = total.toFixed(1);
 
         const disk = 40 + Math.floor(Math.random() * 15);
         const free = Math.floor(256 * (1 - disk / 100));
-        dom.diskBar.style.width = `${disk}%`;
-        dom.diskValue.textContent = disk;
-        dom.diskFree.textContent = free;
+        if (dom.diskBar) dom.diskBar.style.width = `${disk}%`;
+        if (dom.diskValue) dom.diskValue.textContent = disk;
+        if (dom.diskFree) dom.diskFree.textContent = free;
 
         const battery = 70 + Math.floor(Math.random() * 25);
-        dom.batteryBar.style.width = `${battery}%`;
-        dom.batteryValue.textContent = battery;
-        dom.batteryStatus.textContent = battery > 95 ? 'Full' : 'Charging';
+        if (dom.batteryBar) dom.batteryBar.style.width = `${battery}%`;
+        if (dom.batteryValue) dom.batteryValue.textContent = battery;
+        if (dom.batteryStatus) dom.batteryStatus.textContent = battery > 95 ? 'Full' : 'Charging';
     }
 
     updateStats();
-    setInterval(updateStats, 5000);
+    _simStatsInterval = setInterval(updateStats, 5000);
+}
+
+function stopSimulatedStats() {
+    if (_simStatsInterval) {
+        clearInterval(_simStatsInterval);
+        _simStatsInterval = null;
+    }
 }
 
 // ============ KEYBOARD SHORTCUTS ============
 function initKeyboardShortcuts() {
-    dom.chatInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
-    });
+    if (dom.chatInput) {
+        dom.chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+            }
+        });
+    }
 
     document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 'l') { e.preventDefault(); dom.chatInput.focus(); }
-        if (e.ctrlKey && e.key === 'm') { e.preventDefault(); toggleListening(); }
-        if (e.ctrlKey && e.key === 'k') { e.preventDefault(); toggleSidePanel(); }
-        if (e.key === 'Escape') { setState('standby'); closePlanDrawer(); }
+        const key = (e.key || '').toLowerCase();
+        if (e.ctrlKey && key === 'l') { e.preventDefault(); if (dom.chatInput) dom.chatInput.focus(); }
+        if (e.ctrlKey && key === 'm') { e.preventDefault(); toggleListening(); }
+        if (e.ctrlKey && key === 'k') { e.preventDefault(); toggleSidePanel(); }
+        if (key === 'escape') { setState('standby'); closePlanDrawer(); }
     });
 }
 
@@ -961,7 +988,7 @@ async function refreshMemory() {
                 <div class="fact-item">
                     <div class="fact-key">${escapeHtml(f.key.replace(/_/g, ' '))}</div>
                     <div class="fact-value">${escapeHtml(f.value)}</div>
-                    <button class="fact-delete-btn" onclick="deleteFact('${escapeHtml(f.key)}')" title="Forget this">✕</button>
+                    <button class="fact-delete-btn" data-key="${encodeURIComponent(f.key)}" onclick="deleteFact(decodeURIComponent(this.dataset.key))" title="Forget this">✕</button>
                 </div>
             `).join('')}
         </div>
@@ -969,6 +996,7 @@ async function refreshMemory() {
 }
 
 async function deleteFact(key) {
+    if (!key) return;
     await apiCall(`/api/memory/${encodeURIComponent(key)}`, 'DELETE');
     refreshMemory();
 }
@@ -979,6 +1007,7 @@ async function refreshTasks() {
     if (!data) return;
 
     const tasksList = document.getElementById('tasksList');
+    if (!tasksList) return;
     const tasks = data.tasks || [];
 
     if (tasks.length === 0) {
@@ -989,11 +1018,11 @@ async function refreshTasks() {
     const statusEmoji = { running: '🔄', pending: '⏳', done: '✅', failed: '❌', cancelled: '🚫' };
 
     tasksList.innerHTML = tasks.map(t => `
-        <div class="task-item task-${t.status}">
+        <div class="task-item task-${escapeHtml(t.status)}">
             <div class="task-header">
                 <span class="task-status-icon">${statusEmoji[t.status] || '?'}</span>
                 <span class="task-name">${escapeHtml(t.name)}</span>
-                <button class="task-cancel-btn" onclick="cancelTask('${t.id}')" title="Cancel">✕</button>
+                <button class="task-cancel-btn" data-task-id="${escapeHtml(t.id)}" onclick="cancelTask(this.dataset.taskId)" title="Cancel">✕</button>
             </div>
             ${t.progress ? `<div class="task-progress">${escapeHtml(t.progress)}</div>` : ''}
             ${t.is_recurring && t.next_run ? `<div class="task-next">Next: ${new Date(t.next_run * 1000).toLocaleTimeString()}</div>` : ''}
@@ -1002,6 +1031,7 @@ async function refreshTasks() {
 }
 
 async function cancelTask(taskId) {
+    if (!taskId) return;
     await apiCall(`/api/tasks/${taskId}`, 'DELETE');
     refreshTasks();
 }
@@ -1022,6 +1052,7 @@ async function refreshHistory() {
     if (!data) return;
 
     const historyList = document.getElementById('historyList');
+    if (!historyList) return;
     const history = data.history || [];
 
     if (history.length === 0) {
@@ -1053,12 +1084,12 @@ function toggleSidePanel() {
     _sidePanelOpen = !_sidePanelOpen;
 
     if (_sidePanelOpen) {
-        panel.classList.add('open');
-        icon.textContent = '✕';
+        if (panel) panel.classList.add('open');
+        if (icon) icon.textContent = '✕';
         refreshSideContent();
     } else {
-        panel.classList.remove('open');
-        icon.textContent = '💾';
+        if (panel) panel.classList.remove('open');
+        if (icon) icon.textContent = '💾';
     }
 }
 
@@ -1067,8 +1098,10 @@ function switchSideTab(tab) {
     document.querySelectorAll('.side-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.side-content').forEach(c => c.classList.remove('active'));
 
-    document.getElementById(`tab${tab.charAt(0).toUpperCase() + tab.slice(1)}`).classList.add('active');
-    document.getElementById(`content${tab.charAt(0).toUpperCase() + tab.slice(1)}`).classList.add('active');
+    const tabEl = document.getElementById(`tab${tab.charAt(0).toUpperCase() + tab.slice(1)}`);
+    const contentEl = document.getElementById(`content${tab.charAt(0).toUpperCase() + tab.slice(1)}`);
+    if (tabEl) tabEl.classList.add('active');
+    if (contentEl) contentEl.classList.add('active');
     refreshSideContent();
 }
 
@@ -1079,75 +1112,105 @@ function refreshSideContent() {
 }
 
 // ============ POLLING (when backend connected) ============
-function startPolling() {
-    // Reconnect probe. Every other loop bails out while disconnected, so
-    // without this the UI would stay OFFLINE forever once the backend blipped.
-    setInterval(async () => {
-        if (state.backendConnected) return;
-        await apiCall('/api/status');   // a success flips us back online
-    }, 5000);
+let _pollIntervalStarted = false;
+let _reconnectProbeId = null;
 
-    // Confirmations are blocking a request while they sit unanswered, so
-    // they get their own faster loop.
+function startPolling() {
+    if (_pollIntervalStarted) return;
+    _pollIntervalStarted = true;
+
+    // Confirmations poll faster since user interaction blocks execution
     setInterval(pollConfirmations, 1500);
 
-    // Poll tasks and plan every 3 seconds
+    // Poll tasks, live plans, and assistant modules every 3 seconds
     setInterval(async () => {
         if (!state.backendConnected) return;
 
-        // Live plan progress. /api/plan reports the plan currently executing,
-        // so steps tick over as they run instead of appearing all at once.
-        const planData = await apiCall('/api/plan');
-        if (planData && planData.steps && planData.steps.length) {
-            renderPlan(planData);
-        }
+        // Live plan progress
+        try {
+            const planData = await apiCall('/api/plan');
+            if (planData && planData.steps && planData.steps.length) {
+                renderPlan(planData);
+            }
+        } catch (_) {}
 
         // Refresh side panel if open
         if (_sidePanelOpen) {
             refreshSideContent();
         }
 
-        // Update agent mode chip
-        const statusData = await apiCall('/api/assistant-status');
-        if (statusData) {
-            const agentChip = document.getElementById('modACT');
-            if (agentChip) {
-                agentChip.textContent = statusData.agent_mode ? 'AGENT' : 'ACT';
-                agentChip.className = statusData.agent_mode ? 'module-chip active' : 'module-chip';
+        // Update assistant module chips & counts
+        try {
+            const statusData = await apiCall('/api/assistant-status');
+            if (statusData) {
+                const agentChip = document.getElementById('modACT');
+                if (agentChip) {
+                    agentChip.textContent = statusData.agent_mode ? 'AGENT' : 'ACT';
+                    agentChip.className = statusData.agent_mode ? 'module-chip active' : 'module-chip';
+                }
+                const memChip = document.getElementById('modMEM');
+                if (memChip && statusData.memory) {
+                    memChip.className = 'module-chip active';
+                    memChip.title = `${statusData.memory.facts} facts stored`;
+                }
+                if (statusData.tools) {
+                    const actionCountEl = document.getElementById('actionCount');
+                    if (actionCountEl) actionCountEl.textContent = `${statusData.tools} TOOLS`;
+                    const toolCountEl = document.getElementById('toolCount');
+                    if (toolCountEl) toolCountEl.textContent = `${statusData.tools} LOADED`;
+                }
             }
-            const memChip = document.getElementById('modMEM');
-            if (memChip && statusData.memory) {
-                memChip.className = 'module-chip active';
-                memChip.title = `${statusData.memory.facts} facts stored`;
-            }
-            // Update tool count in footer and HUD
-            if (statusData.tools) {
-                const actionCountEl = document.getElementById('actionCount');
-                if (actionCountEl) actionCountEl.textContent = `${statusData.tools} TOOLS`;
-                const toolCountEl = document.getElementById('toolCount');
-                if (toolCountEl) toolCountEl.textContent = `${statusData.tools} LOADED`;
-            }
-        }
+        } catch (_) {}
     }, 3000);
 }
 
-// Start polling after backend connection confirmed
-const _origCheckBackend = checkBackendConnection;
-async function checkBackendConnection() {
-    const data = await apiCall('/api/status');
-    if (data && data.status === 'online') {
-        state.backendConnected = true;
+function startReconnectProbe() {
+    if (_reconnectProbeId) return;
+    _reconnectProbeId = setInterval(async () => {
+        if (state.backendConnected) return;
+        const data = await apiCall('/api/status');
+        if (data && data.status === 'online') {
+            onBackendConnected(data);
+        }
+    }, 4000);
+}
+
+function onBackendConnected(data) {
+    state.backendConnected = true;
+    _reportedOffline = false;
+    _apiFailureStreak = 0;
+    stopSimulatedStats();
+
+    if (dom.systemStatus) {
         dom.systemStatus.textContent = 'ONLINE';
         dom.systemStatus.className = 'hud-value status-online';
-        addMessage('SYSTEM', `Backend connected — ${data.assistant_name} is online (Agent Mode: ${data.agent_mode !== false ? 'ON' : 'OFF'}).`, 'system-msg');
+    }
 
-        if (data.llm_model) $('llmProvider').textContent = data.llm_model.toUpperCase();
-        if (data.stt_engine) $('sttEngine').textContent = data.stt_engine;
-        if (data.tts_engine) $('ttsEngine').textContent = data.tts_engine;
+    addMessage('SYSTEM', `Backend connected — ${data.assistant_name} is online (Agent Mode: ${data.agent_mode !== false ? 'ON' : 'OFF'}).`, 'system-msg');
 
-        fetchRealStats();
-        setInterval(fetchRealStats, 5000);
-        startPolling();
+    if (data.llm_model) {
+        const p = $('llmProvider');
+        if (p) p.textContent = data.llm_model.toUpperCase();
+    }
+    if (data.stt_engine) {
+        const s = $('sttEngine');
+        if (s) s.textContent = data.stt_engine;
+    }
+    if (data.tts_engine) {
+        const t = $('ttsEngine');
+        if (t) t.textContent = data.tts_engine;
+    }
+
+    fetchRealStats();
+    setInterval(fetchRealStats, 5000);
+    startPolling();
+}
+
+async function checkBackendConnection() {
+    startReconnectProbe();
+    const data = await apiCall('/api/status');
+    if (data && data.status === 'online') {
+        onBackendConnected(data);
     } else {
         state.backendConnected = false;
         addMessage('SYSTEM', 'Running in demo mode — no backend connected. Launch with: python server.py', 'system-msg');
