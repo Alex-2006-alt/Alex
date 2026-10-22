@@ -918,6 +918,8 @@ function initKeyboardShortcuts() {
 let _currentPlanData = null;
 let _isPlanEditing = false;
 let _isPlanMinimized = false;
+let _isPlanExpanded = false;
+let _planPollInterval = null;
 
 function renderPlan(plan) {
     if (!plan) return;
@@ -928,36 +930,62 @@ function renderPlan(plan) {
     const planSteps = document.getElementById('planSteps');
     const planSummary = document.getElementById('planSummary');
     const minBadge = document.getElementById('planMinBadge');
+    const statusBadge = document.getElementById('planStatusBadge');
+    const progressContainer = document.getElementById('planProgressContainer');
+    const progressBar = document.getElementById('planProgressBar');
 
     if (!drawer) return;
 
     const steps = plan.steps || [];
-    const summaryText = plan.summary || `${steps.length} step${steps.length !== 1 ? 's' : ''}`;
+    const status = (plan.status || 'idle').toLowerCase();
+    const summaryText = `${steps.length} STEP${steps.length !== 1 ? 'S' : ''} • ${status.toUpperCase()}`;
 
     if (goalText) goalText.textContent = plan.goal || 'Custom Strategic Plan';
     if (planSummary) planSummary.textContent = summaryText;
     if (minBadge) minBadge.textContent = summaryText;
 
+    if (statusBadge) {
+        statusBadge.textContent = status.toUpperCase();
+        statusBadge.className = `plan-status-badge status-${status}`;
+    }
+
+    if (progressContainer && progressBar) {
+        if (steps.length > 0) {
+            const completedCount = steps.filter(s => s.status === 'done').length;
+            const pct = Math.round((completedCount / steps.length) * 100);
+            progressBar.style.width = `${pct}%`;
+            progressContainer.style.display = 'block';
+        } else {
+            progressContainer.style.display = 'none';
+        }
+    }
+
     if (planSteps) {
         if (steps.length === 0) {
-            planSteps.innerHTML = '<div class="plan-empty">No steps currently defined. Click EDIT to customize.</div>';
+            planSteps.innerHTML = '<div class="plan-empty">No steps currently defined. Click ✎ EDIT to design a strategic plan.</div>';
         } else {
             const statusEmoji = { done: '✅', running: '🔄', failed: '❌', pending: '⏳', skipped: '➡️' };
             const statusClass = { done: 'step-done', running: 'step-running', failed: 'step-failed', pending: 'step-pending', skipped: 'step-skipped' };
 
-            planSteps.innerHTML = steps.map(step => `
-                <div class="plan-step ${statusClass[step.status] || 'step-pending'}" id="step-${escapeHtml(String(step.id))}">
-                    <div class="step-header">
-                        <span class="step-status-icon">${statusEmoji[step.status] || '⏳'}</span>
-                        <span class="step-num">STEP ${escapeHtml(String(step.id))}</span>
-                        <span class="step-action">${escapeHtml(String(step.action || ''))}</span>
-                        ${step.duration ? `<span class="step-duration">${escapeHtml(String(step.duration))}s</span>` : ''}
+            planSteps.innerHTML = steps.map(step => {
+                const hasParams = step.params && typeof step.params === 'object' && Object.keys(step.params).length > 0;
+                const paramsStr = hasParams ? JSON.stringify(step.params, null, 2) : '';
+
+                return `
+                    <div class="plan-step ${statusClass[step.status] || 'step-pending'}" id="step-${escapeHtml(String(step.id))}">
+                        <div class="step-header">
+                            <span class="step-status-icon">${statusEmoji[step.status] || '⏳'}</span>
+                            <span class="step-num">STEP ${escapeHtml(String(step.id))}</span>
+                            <span class="step-action-badge">${escapeHtml(String(step.action || 'system'))}</span>
+                            ${step.duration ? `<span class="step-duration">${escapeHtml(String(step.duration))}s</span>` : ''}
+                        </div>
+                        <div class="step-desc">${escapeHtml(String(step.description || 'No description provided'))}</div>
+                        ${hasParams ? `<div class="step-params-box"><strong>ARGS:</strong> ${escapeHtml(paramsStr)}</div>` : ''}
+                        ${step.result ? `<div class="step-result"><strong>RESULT:</strong> ${escapeHtml(String(step.result))}</div>` : ''}
+                        ${step.error ? `<div class="step-error">⚠️ <strong>ERROR:</strong> ${escapeHtml(String(step.error))}</div>` : ''}
                     </div>
-                    <div class="step-desc">${escapeHtml(String(step.description || ''))}</div>
-                    ${step.result ? `<div class="step-result">${escapeHtml(String(step.result).substring(0, 120))}</div>` : ''}
-                    ${step.error ? `<div class="step-error">⚠️ ${escapeHtml(step.error)}</div>` : ''}
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
     }
 
@@ -971,7 +999,11 @@ function closePlanDrawer() {
         drawer.classList.remove('minimized');
         _isPlanMinimized = false;
         const minBtn = document.getElementById('planMinBtn');
-        if (minBtn) minBtn.textContent = '🗕';
+        if (minBtn) minBtn.textContent = '🗕 MIN';
+    }
+    if (_planPollInterval) {
+        clearInterval(_planPollInterval);
+        _planPollInterval = null;
     }
 }
 
@@ -979,14 +1011,14 @@ async function togglePlanDrawer() {
     const drawer = document.getElementById('planDrawer');
     if (!drawer) return;
 
+    if (_isPlanMinimized) {
+        togglePlanMinimize();
+        return;
+    }
+
     drawer.classList.toggle('active');
     if (drawer.classList.contains('active')) {
-        if (!_currentPlanData) {
-            const data = await apiCall('/api/plan');
-            if (data && (data.steps || data.goal)) {
-                renderPlan(data);
-            }
-        }
+        await refreshPlanFromBackend();
     }
 }
 
@@ -999,18 +1031,45 @@ function togglePlanMinimize() {
     _isPlanMinimized = !_isPlanMinimized;
     if (_isPlanMinimized) {
         drawer.classList.add('minimized');
-        if (minBtn) minBtn.textContent = '⤢';
+        if (minBtn) minBtn.textContent = '⤢ RESTORE';
         if (minBadge) minBadge.style.display = 'inline-block';
+        if (_isPlanEditing) cancelPlanEdit();
     } else {
         drawer.classList.remove('minimized');
-        if (minBtn) minBtn.textContent = '🗕';
+        if (minBtn) minBtn.textContent = '🗕 MIN';
         if (minBadge) minBadge.style.display = 'none';
+    }
+}
+
+function togglePlanExpand() {
+    const drawer = document.getElementById('planDrawer');
+    const expandBtn = document.getElementById('planExpandBtn');
+    if (!drawer) return;
+
+    _isPlanExpanded = !_isPlanExpanded;
+    if (_isPlanExpanded) {
+        drawer.classList.add('expanded');
+        if (expandBtn) expandBtn.textContent = '⤢ NORM';
+    } else {
+        drawer.classList.remove('expanded');
+        if (expandBtn) expandBtn.textContent = '⛶ WIDE';
     }
 }
 
 function handleDrawerTitleClick() {
     if (_isPlanMinimized) {
         togglePlanMinimize();
+    }
+}
+
+async function refreshPlanFromBackend() {
+    try {
+        const data = await apiCall('/api/plan');
+        if (data) {
+            renderPlan(data);
+        }
+    } catch (e) {
+        console.warn('Failed to refresh plan from backend:', e);
     }
 }
 
@@ -1034,35 +1093,71 @@ function togglePlanEditMode() {
             container.innerHTML = '';
             const existingSteps = _currentPlanData?.steps || [];
             if (existingSteps.length === 0) {
-                addPlanEditStep('web_search', 'Search for necessary information');
-                addPlanEditStep('system_info', 'Check system diagnostics');
+                addPlanEditStep('web_search', 'Search for necessary documentation and information', { query: 'ALEX AI system instructions' });
+                addPlanEditStep('system_info', 'Retrieve current system diagnostics and resource health', {});
             } else {
-                existingSteps.forEach(s => addPlanEditStep(s.action, s.description));
+                existingSteps.forEach(s => addPlanEditStep(s.action, s.description, s.params));
             }
         }
     } else {
-        if (viewMode) viewMode.style.display = 'block';
+        if (viewMode) viewMode.style.display = 'flex';
         if (editMode) editMode.style.display = 'none';
-        if (editBtn) editBtn.textContent = '✏️ EDIT';
+        if (editBtn) editBtn.textContent = '✎ EDIT';
     }
 }
 
-function addPlanEditStep(action = '', description = '') {
+const COMMON_PLAN_ACTIONS = [
+    'web_search',
+    'system_info',
+    'app_open',
+    'shell_cmd',
+    'file_read',
+    'file_write',
+    'screen_vision',
+    'ask_user',
+    'custom'
+];
+
+function addPlanEditStep(action = 'web_search', description = '', params = {}) {
     const container = document.getElementById('editPlanSteps');
     if (!container) return;
 
     const stepIndex = container.children.length + 1;
     const item = document.createElement('div');
     item.className = 'edit-step-item';
+
+    const isKnownAction = COMMON_PLAN_ACTIONS.includes(action);
+    const selectedAction = isKnownAction ? action : 'custom';
+    const paramsJson = params && Object.keys(params).length > 0 ? JSON.stringify(params) : '';
+
     item.innerHTML = `
-        <div class="edit-step-header">
+        <div class="edit-step-top-row">
             <span class="edit-step-num">STEP ${stepIndex}</span>
-            <input type="text" class="edit-step-action-input" placeholder="Action (e.g. web_search, app_open)" value="${escapeHtml(action)}">
-            <button type="button" class="edit-step-del-btn" onclick="removePlanEditStep(this)" title="Delete Step">🗑</button>
+            <select class="edit-step-action-select" onchange="handleStepActionSelect(this)">
+                ${COMMON_PLAN_ACTIONS.map(act => `<option value="${act}" ${act === selectedAction ? 'selected' : ''}>${act.toUpperCase()}</option>`).join('')}
+            </select>
+            <input type="text" class="edit-step-action-input" placeholder="Custom action..." value="${escapeHtml(action)}" style="${selectedAction === 'custom' ? 'display:block;' : 'display:none;'}">
+            <button type="button" class="edit-step-del-btn" onclick="removePlanEditStep(this)" title="Delete Step">🗑 DEL</button>
         </div>
         <input type="text" class="edit-step-desc-input" placeholder="Step description..." value="${escapeHtml(description)}">
+        <input type="text" class="edit-step-params-input" placeholder='Arguments JSON (e.g. {"query": "weather"})' value="${escapeHtml(paramsJson)}">
     `;
     container.appendChild(item);
+}
+
+function handleStepActionSelect(selectEl) {
+    const row = selectEl.closest('.edit-step-top-row');
+    if (!row) return;
+    const customInput = row.querySelector('.edit-step-action-input');
+    if (!customInput) return;
+
+    if (selectEl.value === 'custom') {
+        customInput.style.display = 'block';
+        customInput.focus();
+    } else {
+        customInput.style.display = 'none';
+        customInput.value = selectEl.value;
+    }
 }
 
 function removePlanEditStep(btn) {
@@ -1093,17 +1188,32 @@ async function savePlanToBackend() {
     const steps = [];
 
     stepItems.forEach((item, idx) => {
-        const actionInput = item.querySelector('.edit-step-action-input');
+        const actionSelect = item.querySelector('.edit-step-action-select');
+        const customActionInput = item.querySelector('.edit-step-action-input');
         const descInput = item.querySelector('.edit-step-desc-input');
-        const action = actionInput ? actionInput.value.trim() : '';
+        const paramsInput = item.querySelector('.edit-step-params-input');
+
+        let action = actionSelect?.value || 'web_search';
+        if (action === 'custom' && customActionInput?.value.trim()) {
+            action = customActionInput.value.trim();
+        }
+
         const description = descInput ? descInput.value.trim() : '';
+        let params = {};
+        if (paramsInput && paramsInput.value.trim()) {
+            try {
+                params = JSON.parse(paramsInput.value.trim());
+            } catch (e) {
+                params = { raw: paramsInput.value.trim() };
+            }
+        }
 
         if (action || description) {
             steps.push({
                 id: idx + 1,
                 action: action || 'system_info',
                 description: description || `Step ${idx + 1}`,
-                params: {},
+                params: params,
                 status: 'pending'
             });
         }
@@ -1120,7 +1230,7 @@ async function savePlanToBackend() {
             _currentPlanData = res.plan;
             renderPlan(res.plan);
             togglePlanEditMode();
-            addMessage('SYSTEM', `Strategic plan "${res.plan.goal}" saved to backend (${res.plan.steps.length} steps).`, 'system-msg');
+            addMessage('SYSTEM', `Strategic plan "${res.plan.goal}" saved to backend with ${res.plan.steps.length} step(s).`, 'system-msg');
         } else {
             addMessage('SYSTEM', `Failed to save plan: ${res?.error || 'Unknown error'}`, 'error-msg');
         }
@@ -1145,14 +1255,35 @@ async function executeCurrentPlan() {
         const res = await apiCall('/api/plan/execute', 'POST');
         if (res && res.status === 'running') {
             addMessage('SYSTEM', 'Autonomous execution of strategic plan started.', 'system-msg');
-            const data = await apiCall('/api/plan');
-            if (data) renderPlan(data);
+            await refreshPlanFromBackend();
+
+            // Poll progress every 1.5 seconds until done
+            if (_planPollInterval) clearInterval(_planPollInterval);
+            _planPollInterval = setInterval(async () => {
+                const planData = await apiCall('/api/plan');
+                if (planData) {
+                    renderPlan(planData);
+                    const status = (planData.status || '').toLowerCase();
+                    if (status === 'completed' || status === 'failed' || status === 'idle') {
+                        clearInterval(_planPollInterval);
+                        _planPollInterval = null;
+                        if (runBtn) {
+                            runBtn.disabled = false;
+                            runBtn.textContent = '▶ RUN';
+                        }
+                        addMessage('SYSTEM', `Strategic plan execution ended with status: ${status.toUpperCase()}.`, status === 'failed' ? 'error-msg' : 'system-msg');
+                    }
+                }
+            }, 1500);
         } else {
             addMessage('SYSTEM', `Cannot execute plan: ${res?.error || 'No steps to run.'}`, 'error-msg');
+            if (runBtn) {
+                runBtn.disabled = false;
+                runBtn.textContent = '▶ RUN';
+            }
         }
     } catch (e) {
         addMessage('SYSTEM', `Execution error: ${e.message}`, 'error-msg');
-    } finally {
         if (runBtn) {
             runBtn.disabled = false;
             runBtn.textContent = '▶ RUN';

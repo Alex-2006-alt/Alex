@@ -7,7 +7,7 @@
     <meta name="description" content="ALEX — Personal AI Assistant with JARVIS-style holographic interface">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=2">
+    <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
     <!-- Ambient Background -->
@@ -312,26 +312,38 @@
     <!-- Strategy & Plan Execution Drawer -->
     <aside class="plan-drawer" id="planDrawer">
         <div class="drawer-header" id="planDrawerHeader">
-            <div class="plan-drawer-title" onclick="handleDrawerTitleClick()">
+            <div class="plan-drawer-title" onclick="handleDrawerTitleClick()" title="Click to expand/restore">
                 <span class="plan-icon">📋</span>
                 <span id="planDrawerTitle">STRATEGIC PLAN</span>
                 <span class="plan-min-badge" id="planMinBadge" style="display: none;">0 steps</span>
             </div>
             <div class="drawer-header-actions">
-                <button class="drawer-action-btn" id="planEditBtn" onclick="togglePlanEditMode()" title="Edit Strategic Plan">✏️ EDIT</button>
+                <button class="drawer-action-btn" id="planEditBtn" onclick="togglePlanEditMode()" title="Edit Strategic Plan">✎ EDIT</button>
                 <button class="drawer-action-btn run-btn" id="planRunBtn" onclick="executeCurrentPlan()" title="Execute Plan">▶ RUN</button>
-                <button class="drawer-action-btn min-btn" id="planMinBtn" onclick="togglePlanMinimize()" title="Minimize / Expand Plan">🗕</button>
+                <button class="drawer-action-btn expand-btn" id="planExpandBtn" onclick="togglePlanExpand()" title="Toggle Wide View">⛶ WIDE</button>
+                <button class="drawer-action-btn min-btn" id="planMinBtn" onclick="togglePlanMinimize()" title="Minimize / Dock Plan">🗕 MIN</button>
                 <button class="drawer-close-btn" onclick="closePlanDrawer()" title="Close Plan (Esc)">✕</button>
             </div>
         </div>
         <div class="drawer-body" id="planDrawerBody">
             <!-- View Mode -->
             <div id="planViewMode">
-                <div class="plan-goal-card">
-                    <div class="plan-label">ACTIVE OBJECTIVE</div>
+                <div class="plan-goal-card" id="planGoalCard">
+                    <div class="plan-card-top">
+                        <span class="plan-label">ACTIVE OBJECTIVE</span>
+                        <span class="plan-status-badge status-idle" id="planStatusBadge">IDLE</span>
+                    </div>
                     <div class="plan-goal-text" id="planGoalText">No active plan</div>
+                    <div class="plan-progress-container" id="planProgressContainer" style="display: none;">
+                        <div class="plan-progress-bar" id="planProgressBar" style="width: 0%;"></div>
+                    </div>
                 </div>
-                <div class="plan-summary-badge" id="planSummary">0 steps</div>
+
+                <div class="plan-meta-bar">
+                    <span class="plan-summary-badge" id="planSummary">0 steps</span>
+                    <button class="small-btn sync-btn" onclick="refreshPlanFromBackend()" title="Sync with backend">🔄 REFRESH</button>
+                </div>
+
                 <div class="plan-steps-container" id="planSteps">
                     <div class="plan-empty">Awaiting autonomous plan execution...</div>
                 </div>
@@ -340,16 +352,19 @@
             <!-- Edit Mode -->
             <div id="planEditMode" style="display: none;">
                 <div class="plan-goal-card edit-card">
-                    <label class="plan-label" for="editPlanGoal">ACTIVE OBJECTIVE</label>
-                    <textarea id="editPlanGoal" class="edit-plan-textarea" rows="2" placeholder="Enter plan objective/goal..."></textarea>
+                    <label class="plan-label" for="editPlanGoal">ACTIVE OBJECTIVE / GOAL</label>
+                    <textarea id="editPlanGoal" class="edit-plan-textarea" rows="3" placeholder="Describe the objective or prompt to execute..."></textarea>
                 </div>
+
                 <div class="edit-steps-header">
                     <span class="plan-label">STEPS TO EXECUTE</span>
                     <button type="button" class="small-btn add-step-btn" onclick="addPlanEditStep()">+ ADD STEP</button>
                 </div>
+
                 <div class="edit-steps-container" id="editPlanSteps">
-                    <!-- Injected dynamically by app.js -->
+                    <!-- Step items injected by app.js -->
                 </div>
+
                 <div class="edit-actions-bar">
                     <button type="button" class="plan-save-btn" id="planSaveBtn" onclick="savePlanToBackend()">💾 SAVE TO BACKEND</button>
                     <button type="button" class="plan-cancel-btn" onclick="cancelPlanEdit()">CANCEL</button>
@@ -392,6 +407,6 @@
         </div>
     </footer>
 
-    <script src="app.js?v=2"></script>
+    <script src="app.js?v=3"></script>
 </body>
 </html>
