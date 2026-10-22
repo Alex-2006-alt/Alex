@@ -268,6 +268,86 @@ def api_chat():
     })
 
 
+# ── Whisper Speech Recognition APIs ───────────────────────────────────────────
+
+@app.route("/api/transcribe", methods=["POST"])
+def api_transcribe():
+    """
+    Transcribe audio recorded in the browser using the local Whisper model.
+    Accepts WAV file uploads (multipart/form-data), raw binary WAV, or JSON base64.
+    """
+    try:
+        from utils.audio_utils import wav_bytes_to_audio
+        import numpy as np
+
+        assistant = _get_assistant()
+        if not hasattr(assistant, "listener") or not assistant.listener:
+            return jsonify({"error": "Whisper listener not available"}), 503
+
+        wav_bytes = None
+
+        if "file" in request.files:
+            wav_bytes = request.files["file"].read()
+        elif request.data:
+            wav_bytes = request.data
+        elif request.is_json:
+            import base64
+            b64_str = (request.get_json() or {}).get("base64")
+            if b64_str:
+                wav_bytes = base64.b64decode(b64_str)
+
+        if not wav_bytes:
+            return jsonify({"error": "No audio data provided"}), 400
+
+        try:
+            audio_data = wav_bytes_to_audio(wav_bytes)
+        except Exception as decode_err:
+            log.warning(f"Failed to decode WAV in memory: {decode_err}")
+            # Fallback: save to temp file and use transcribe_file
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp.write(wav_bytes)
+                tmp_path = tmp.name
+            try:
+                text = assistant.listener.transcribe_file(tmp_path)
+            finally:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return jsonify({"text": text or "", "success": bool(text)})
+
+        if audio_data is None or len(audio_data) == 0:
+            return jsonify({"error": "Decoded audio is empty"}), 400
+
+        # Transcribe with local Whisper
+        text = assistant.listener.transcribe(audio_data)
+        return jsonify({"text": text or "", "success": bool(text)})
+
+    except Exception as e:
+        log.error(f"Whisper transcribe API error: {e}")
+        return jsonify({"error": str(e), "success": False}), 500
+
+
+@app.route("/api/voice/listen", methods=["POST"])
+def api_voice_listen():
+    """
+    Trigger recording on host PC microphone and transcribe with local Whisper.
+    Useful when browser microphone is unavailable or host microphone is preferred.
+    """
+    try:
+        assistant = _get_assistant()
+        if not hasattr(assistant, "listener") or not assistant.listener:
+            return jsonify({"error": "Whisper listener not available"}), 503
+
+        log.info("🎙️ Voice listen triggered via API (Host PC Mic + Whisper)...")
+        text = assistant.listener.listen()
+        return jsonify({"text": text or "", "success": bool(text)})
+    except Exception as e:
+        log.error(f"Voice listen API error: {e}")
+        return jsonify({"error": str(e), "success": False}), 500
+
+
 @app.route("/api/confirmations")
 def api_confirmations_list():
     """Confirmations waiting on the user. The GUI polls this."""

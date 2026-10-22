@@ -67,6 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initWaveform();
     initKeyboardShortcuts();
     initWebSpeech();
+    initWhisperSpeech();
     checkBackendConnection();
     bootSequence();
 });
@@ -675,13 +676,13 @@ function setState(newState) {
     }
 }
 
-// ============ WEB SPEECH API & SPEECH SYNTHESIS ============
+// ============ WEB SPEECH API & SPEECH RECOGNITION ============
 let recognition = null;
 
 function initWebSpeech() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-        console.log("Web Speech API not supported in this browser context.");
+        console.log("Web Speech API not supported in this browser context. Whisper fallback will be used.");
         return;
     }
 
@@ -723,18 +724,258 @@ function initWebSpeech() {
 
     recognition.onerror = (event) => {
         console.warn("Speech recognition error:", event.error);
-        if (event.error !== 'no-speech') {
+        if (event.error === 'network') {
+            addMessage('SYSTEM', 'Speech network error: Google speech service unreachable. Falling back to local Whisper...', 'system-msg');
+            startWhisperListening();
+            return;
+        } else if (event.error !== 'no-speech') {
             addMessage('SYSTEM', `Speech error: ${event.error}`, 'error-msg');
         }
         setState('standby');
     };
 
     recognition.onend = () => {
-        if (state.isListening) {
+        if (state.isListening && !isWhisperRecording) {
             setState('standby');
         }
     };
 }
+
+// ============ LOCAL WHISPER SPEECH RECOGNITION ============
+let whisperAudioContext = null;
+let whisperMediaStream = null;
+let whisperProcessor = null;
+let whisperAudioChunks = [];
+let whisperSilenceTimer = null;
+let whisperSpeechDetected = false;
+let isWhisperRecording = false;
+
+function initWhisperSpeech() {
+    console.log("ALEX STT: OpenAI Whisper (Local / Offline) activated.");
+}
+
+function writeWavString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+    }
+}
+
+function floatTo16BitPCM(output, offset, input) {
+    for (let i = 0; i < input.length; i++, offset += 2) {
+        let s = Math.max(-1, Math.min(1, input[i]));
+        output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+}
+
+function exportWavBlob(chunks, inputSampleRate) {
+    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+    }
+
+    const targetRate = 16000;
+    let downsampled;
+    if (inputSampleRate === targetRate) {
+        downsampled = merged;
+    } else {
+        const ratio = inputSampleRate / targetRate;
+        const newLength = Math.round(merged.length / ratio);
+        downsampled = new Float32Array(newLength);
+        for (let i = 0; i < newLength; i++) {
+            downsampled[i] = merged[Math.min(Math.round(i * ratio), merged.length - 1)];
+        }
+    }
+
+    const buffer = new ArrayBuffer(44 + downsampled.length * 2);
+    const view = new DataView(buffer);
+
+    writeWavString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + downsampled.length * 2, true);
+    writeWavString(view, 8, 'WAVE');
+    writeWavString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // Mono
+    view.setUint32(24, targetRate, true);
+    view.setUint32(28, targetRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeWavString(view, 36, 'data');
+    view.setUint32(40, downsampled.length * 2, true);
+
+    floatTo16BitPCM(view, 44, downsampled);
+    return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function startWhisperListening() {
+    if (isWhisperRecording) return;
+
+    const speechEl = document.getElementById('liveSpeechPreview');
+    const badge = document.getElementById('inspectorStateBadge');
+
+    try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error("getUserMedia not supported");
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                channelCount: 1,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        });
+
+        whisperMediaStream = stream;
+        whisperAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = whisperAudioContext.createMediaStreamSource(stream);
+
+        whisperProcessor = whisperAudioContext.createScriptProcessor(4096, 1, 1);
+        whisperAudioChunks = [];
+        whisperSpeechDetected = false;
+        isWhisperRecording = true;
+
+        setState('listening');
+        if (speechEl) speechEl.textContent = 'Listening with Whisper... (speak now)';
+        if (badge) badge.textContent = 'LISTENING (WHISPER)';
+
+        whisperProcessor.onaudioprocess = (e) => {
+            if (!isWhisperRecording) return;
+            const channelData = e.inputBuffer.getChannelData(0);
+            whisperAudioChunks.push(new Float32Array(channelData));
+
+            let sum = 0;
+            for (let i = 0; i < channelData.length; i++) {
+                sum += channelData[i] * channelData[i];
+            }
+            const rms = Math.sqrt(sum / channelData.length);
+
+            if (rms > 0.02) {
+                if (!whisperSpeechDetected) {
+                    whisperSpeechDetected = true;
+                    if (speechEl) speechEl.textContent = 'Recording speech...';
+                }
+                clearTimeout(whisperSilenceTimer);
+                whisperSilenceTimer = setTimeout(() => {
+                    if (isWhisperRecording && whisperSpeechDetected) {
+                        stopWhisperListening();
+                    }
+                }, 1800);
+            }
+        };
+
+        source.connect(whisperProcessor);
+        whisperProcessor.connect(whisperAudioContext.destination);
+
+    } catch (err) {
+        console.warn("Browser mic access failed, trying host PC mic via Whisper API:", err);
+        fallbackServerWhisperListen();
+    }
+}
+
+async function stopWhisperListening() {
+    if (!isWhisperRecording) return;
+    isWhisperRecording = false;
+    clearTimeout(whisperSilenceTimer);
+
+    const speechEl = document.getElementById('liveSpeechPreview');
+    const badge = document.getElementById('inspectorStateBadge');
+
+    if (speechEl) speechEl.textContent = 'Transcribing with Whisper...';
+    if (badge) badge.textContent = 'TRANSCRIBING';
+    setState('thinking');
+
+    try {
+        if (whisperProcessor) {
+            whisperProcessor.disconnect();
+            whisperProcessor = null;
+        }
+        if (whisperMediaStream) {
+            whisperMediaStream.getTracks().forEach(t => t.stop());
+            whisperMediaStream = null;
+        }
+        const sampleRate = whisperAudioContext ? whisperAudioContext.sampleRate : 44100;
+        if (whisperAudioContext) {
+            await whisperAudioContext.close();
+            whisperAudioContext = null;
+        }
+
+        if (whisperAudioChunks.length === 0) {
+            setState('standby');
+            if (speechEl) speechEl.textContent = 'No audio recorded.';
+            return;
+        }
+
+        const wavBlob = exportWavBlob(whisperAudioChunks, sampleRate);
+        const formData = new FormData();
+        formData.append('file', wavBlob, 'recording.wav');
+
+        const response = await fetch('/api/transcribe', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            if (response.status === 405 || response.status === 404) {
+                addMessage('SYSTEM', 'Whisper backend endpoint not active yet. Please restart your server terminal (Ctrl+C and re-run "python main.py --server") to enable offline Whisper.', 'system-msg');
+                setState('standby');
+                return;
+            }
+            throw new Error(`Server returned HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const text = (data.text || '').trim();
+
+        if (text) {
+            if (speechEl) speechEl.textContent = text;
+            addMessage('USER', `🗣️ ${text}`, 'user-msg');
+            sendCommand(text);
+        } else {
+            if (speechEl) speechEl.textContent = 'No speech detected by Whisper.';
+            addMessage('SYSTEM', 'Whisper heard silence or ambient noise. Please try again.', 'system-msg');
+            setState('standby');
+        }
+
+    } catch (err) {
+        console.error("Whisper transcription error:", err);
+        addMessage('SYSTEM', `Whisper transcription error: ${err.message || err}`, 'error-msg');
+        setState('standby');
+    }
+}
+
+async function fallbackServerWhisperListen() {
+    setState('listening');
+    const speechEl = document.getElementById('liveSpeechPreview');
+    const badge = document.getElementById('inspectorStateBadge');
+    if (speechEl) speechEl.textContent = 'Listening on host microphone (Whisper)...';
+    if (badge) badge.textContent = 'LISTENING (WHISPER)';
+    addMessage('SYSTEM', 'Listening on host PC microphone with Whisper...', 'system-msg');
+
+    try {
+        const res = await fetch('/api/voice/listen', { method: 'POST' });
+        const data = await res.json();
+        const text = (data.text || '').trim();
+        if (text) {
+            if (speechEl) speechEl.textContent = text;
+            addMessage('USER', `🗣️ ${text}`, 'user-msg');
+            sendCommand(text);
+        } else {
+            if (speechEl) speechEl.textContent = 'No speech detected by Whisper.';
+            addMessage('SYSTEM', 'Whisper heard silence. Try again.', 'system-msg');
+            setState('standby');
+        }
+    } catch (err) {
+        console.error("Host PC Whisper listen failed:", err);
+        addMessage('SYSTEM', `Whisper listen failed: ${err.message || err}`, 'error-msg');
+        setState('standby');
+    }
+}
+
 
 function speakText(text) {
     // Every path must land on standby.
@@ -810,6 +1051,13 @@ function updateLiveInspector(userText, responseText, action = null, params = nul
 
 // ============ LISTENING TOGGLE ============
 function toggleListening() {
+    if (isWhisperRecording) {
+        stopWhisperListening();
+        setState('standby');
+        addMessage('SYSTEM', 'Microphone deactivated.', 'system-msg');
+        return;
+    }
+
     if (state.isListening) {
         if (recognition) {
             try { recognition.stop(); } catch (e) {}
@@ -822,20 +1070,15 @@ function toggleListening() {
                 recognition.start();
                 setState('listening');
             } catch (err) {
-                console.warn("Recognition start failed:", err);
+                console.warn("Recognition start failed, falling back to Whisper:", err);
                 if (err.name === 'InvalidStateError') {
                     setState('listening');
                 } else {
-                    setState('standby');
-                    addMessage('SYSTEM', `Microphone could not start: ${err.message || err}`, 'error-msg');
+                    startWhisperListening();
                 }
             }
         } else {
-            setState('listening');
-            addMessage('SYSTEM', 'Microphone activated (Web Speech API unsupported on this browser).', 'system-msg');
-            setTimeout(() => {
-                if (state.isListening) setState('standby');
-            }, 5000);
+            startWhisperListening();
         }
     }
 }
