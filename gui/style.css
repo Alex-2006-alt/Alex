@@ -1612,28 +1612,125 @@ body {
     width: min(780px, 96vw);
 }
 
-/* Minimized Docked State */
+/* Minimized State (Fully Slides Off Screen) */
 .plan-drawer.minimized {
-    right: 20px !important;
-    bottom: 60px !important;
-    top: auto !important;
-    width: 360px !important;
-    max-width: calc(100vw - 40px) !important;
-    height: 46px !important;
-    border-radius: 8px 8px 0 0 !important;
-    box-shadow: 0 0 25px rgba(0, 212, 255, 0.35) !important;
-    background: rgba(4, 14, 32, 0.98) !important;
-    border: 1px solid var(--primary) !important;
-    overflow: hidden !important;
-    z-index: 60 !important;
+    right: -600px !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
+    transform: translateX(100%) !important;
 }
 
-.plan-drawer.minimized .drawer-body {
+/* Floating Dock Pill (Full Minimization Indicator) */
+.plan-dock-pill {
+    position: fixed;
+    right: 20px;
+    bottom: 60px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    background: rgba(3, 12, 28, 0.94);
+    border: 1px solid var(--accent);
+    border-radius: 20px;
+    box-shadow: 0 0 16px var(--accent-glow), 0 4px 18px rgba(0, 0, 0, 0.6);
+    cursor: pointer;
+    z-index: 60;
+    font-family: var(--font-display);
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    color: var(--primary);
+    backdrop-filter: blur(14px);
+    transition: all 0.25s var(--ease);
+    animation: slideInUp 0.3s var(--ease);
+    user-select: none;
+}
+
+.plan-dock-pill:hover {
+    background: rgba(0, 212, 255, 0.25);
+    border-color: var(--primary);
+    box-shadow: 0 0 22px var(--primary-glow);
+    transform: translateY(-2px);
+}
+
+.plan-dock-pill .dock-icon {
+    font-size: 13px;
+}
+
+.plan-dock-pill .dock-text {
+    font-weight: 700;
+}
+
+.plan-dock-pill .dock-count {
+    background: rgba(0, 255, 136, 0.2);
+    color: var(--accent);
+    border: 1px solid rgba(0, 255, 136, 0.4);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 1px 7px;
+    border-radius: 10px;
+}
+
+.plan-dock-pill .dock-arrow {
+    color: var(--primary-dim);
+    font-size: 10px;
+    font-family: var(--font-mono);
+}
+
+/* Section & Step Fold States */
+.plan-card-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.card-toggle-fold {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--primary-dim);
+    padding: 2px 6px;
+    border-radius: 3px;
+    line-height: 1;
+    transition: all 0.2s;
+    user-select: none;
+}
+
+.card-toggle-fold:hover {
+    color: var(--accent);
+    background: rgba(0, 255, 136, 0.15);
+}
+
+.plan-goal-card.folded .plan-goal-text,
+.plan-goal-card.folded .plan-progress-container {
     display: none !important;
 }
 
-.plan-drawer.minimized .plan-min-badge {
-    display: inline-block !important;
+.plan-meta-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.plan-step .step-fold-icon {
+    margin-left: auto;
+    cursor: pointer;
+    color: var(--primary-dim);
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: all 0.2s;
+    user-select: none;
+}
+
+.plan-step .step-fold-icon:hover {
+    color: var(--primary);
+    background: rgba(0, 212, 255, 0.15);
+}
+
+.plan-step.folded .step-desc,
+.plan-step.folded .step-params-box,
+.plan-step.folded .step-result,
+.plan-step.folded .step-error {
+    display: none !important;
 }
 
 .drawer-header {

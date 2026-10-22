@@ -7,7 +7,7 @@
     <meta name="description" content="ALEX — Personal AI Assistant with JARVIS-style holographic interface">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=3">
+    <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
     <!-- Ambient Background -->
@@ -321,7 +321,7 @@
                 <button class="drawer-action-btn" id="planEditBtn" onclick="togglePlanEditMode()" title="Edit Strategic Plan">✎ EDIT</button>
                 <button class="drawer-action-btn run-btn" id="planRunBtn" onclick="executeCurrentPlan()" title="Execute Plan">▶ RUN</button>
                 <button class="drawer-action-btn expand-btn" id="planExpandBtn" onclick="togglePlanExpand()" title="Toggle Wide View">⛶ WIDE</button>
-                <button class="drawer-action-btn min-btn" id="planMinBtn" onclick="togglePlanMinimize()" title="Minimize / Dock Plan">🗕 MIN</button>
+                <button class="drawer-action-btn min-btn" id="planMinBtn" onclick="minimizePlanDrawer()" title="Fully Minimize Plan to Dock">— MIN</button>
                 <button class="drawer-close-btn" onclick="closePlanDrawer()" title="Close Plan (Esc)">✕</button>
             </div>
         </div>
@@ -331,7 +331,10 @@
                 <div class="plan-goal-card" id="planGoalCard">
                     <div class="plan-card-top">
                         <span class="plan-label">ACTIVE OBJECTIVE</span>
-                        <span class="plan-status-badge status-idle" id="planStatusBadge">IDLE</span>
+                        <div class="plan-card-controls">
+                            <span class="plan-status-badge status-idle" id="planStatusBadge">IDLE</span>
+                            <span class="card-toggle-fold" id="goalFoldBtn" onclick="toggleGoalFold()" title="Fold / Unfold Objective">▾</span>
+                        </div>
                     </div>
                     <div class="plan-goal-text" id="planGoalText">No active plan</div>
                     <div class="plan-progress-container" id="planProgressContainer" style="display: none;">
@@ -341,7 +344,10 @@
 
                 <div class="plan-meta-bar">
                     <span class="plan-summary-badge" id="planSummary">0 steps</span>
-                    <button class="small-btn sync-btn" onclick="refreshPlanFromBackend()" title="Sync with backend">🔄 REFRESH</button>
+                    <div class="plan-meta-actions">
+                        <button class="small-btn fold-btn" id="toggleFoldAllBtn" onclick="toggleFoldAllSteps()" title="Fold / Unfold all step details">⊟ FOLD STEPS</button>
+                        <button class="small-btn sync-btn" onclick="refreshPlanFromBackend()" title="Sync with backend">🔄 REFRESH</button>
+                    </div>
                 </div>
 
                 <div class="plan-steps-container" id="planSteps">
@@ -372,6 +378,14 @@
             </div>
         </div>
     </aside>
+
+    <!-- Strategic Plan Minimized Dock Button (Full Minimize) -->
+    <div class="plan-dock-pill" id="planDockPill" onclick="restorePlanDrawer()" title="Click to Restore Strategic Plan" style="display: none;">
+        <span class="dock-icon">📋</span>
+        <span class="dock-text">STRATEGIC PLAN</span>
+        <span class="dock-count" id="dockStepCount">0 STEPS</span>
+        <span class="dock-arrow">⤢ RESTORE</span>
+    </div>
 
     <!-- Bottom HUD Bar -->
     <footer class="hud-bottom" id="hudBottom">
@@ -407,6 +421,6 @@
         </div>
     </footer>
 
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
 </body>
 </html>

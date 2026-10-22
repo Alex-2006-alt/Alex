@@ -910,6 +910,7 @@ function initKeyboardShortcuts() {
         if (e.ctrlKey && key === 'l') { e.preventDefault(); if (dom.chatInput) dom.chatInput.focus(); }
         if (e.ctrlKey && key === 'm') { e.preventDefault(); toggleListening(); }
         if (e.ctrlKey && key === 'k') { e.preventDefault(); toggleSidePanel(); }
+        if (e.ctrlKey && key === 'p') { e.preventDefault(); togglePlanDrawer(); }
         if (key === 'escape') { setState('standby'); closePlanDrawer(); }
     });
 }
@@ -920,6 +921,7 @@ let _isPlanEditing = false;
 let _isPlanMinimized = false;
 let _isPlanExpanded = false;
 let _planPollInterval = null;
+let _allStepsFolded = false;
 
 function renderPlan(plan) {
     if (!plan) return;
@@ -933,6 +935,7 @@ function renderPlan(plan) {
     const statusBadge = document.getElementById('planStatusBadge');
     const progressContainer = document.getElementById('planProgressContainer');
     const progressBar = document.getElementById('planProgressBar');
+    const dockStepCount = document.getElementById('dockStepCount');
 
     if (!drawer) return;
 
@@ -943,6 +946,7 @@ function renderPlan(plan) {
     if (goalText) goalText.textContent = plan.goal || 'Custom Strategic Plan';
     if (planSummary) planSummary.textContent = summaryText;
     if (minBadge) minBadge.textContent = summaryText;
+    if (dockStepCount) dockStepCount.textContent = `${steps.length} STEP${steps.length !== 1 ? 'S' : ''}`;
 
     if (statusBadge) {
         statusBadge.textContent = status.toUpperCase();
@@ -978,6 +982,7 @@ function renderPlan(plan) {
                             <span class="step-num">STEP ${escapeHtml(String(step.id))}</span>
                             <span class="step-action-badge">${escapeHtml(String(step.action || 'system'))}</span>
                             ${step.duration ? `<span class="step-duration">${escapeHtml(String(step.duration))}s</span>` : ''}
+                            <span class="step-fold-icon" onclick="toggleStepFold('step-${escapeHtml(String(step.id))}')" title="Fold / Unfold Step Details">▾</span>
                         </div>
                         <div class="step-desc">${escapeHtml(String(step.description || 'No description provided'))}</div>
                         ${hasParams ? `<div class="step-params-box"><strong>ARGS:</strong> ${escapeHtml(paramsStr)}</div>` : ''}
@@ -989,18 +994,73 @@ function renderPlan(plan) {
         }
     }
 
+    if (!_isPlanMinimized) {
+        drawer.classList.add('active');
+        drawer.classList.remove('minimized');
+    }
+}
+
+function minimizePlanDrawer() {
+    const drawer = document.getElementById('planDrawer');
+    const dockPill = document.getElementById('planDockPill');
+    const toggleBtn = document.getElementById('btnTogglePlan');
+    if (!drawer) return;
+
+    _isPlanMinimized = true;
+    drawer.classList.remove('active');
+    drawer.classList.add('minimized');
+
+    if (dockPill) dockPill.style.display = 'inline-flex';
+    if (toggleBtn) {
+        toggleBtn.classList.add('active');
+        toggleBtn.textContent = `PLAN (${_currentPlanData?.steps?.length || 0})`;
+    }
+    if (_isPlanEditing) cancelPlanEdit();
+}
+
+function restorePlanDrawer() {
+    const drawer = document.getElementById('planDrawer');
+    const dockPill = document.getElementById('planDockPill');
+    const toggleBtn = document.getElementById('btnTogglePlan');
+    if (!drawer) return;
+
+    _isPlanMinimized = false;
+    drawer.classList.remove('minimized');
     drawer.classList.add('active');
+
+    if (dockPill) dockPill.style.display = 'none';
+    if (toggleBtn) {
+        toggleBtn.classList.remove('active');
+        toggleBtn.textContent = 'PLAN';
+    }
+
+    refreshPlanFromBackend();
+}
+
+function togglePlanMinimize() {
+    if (_isPlanMinimized) {
+        restorePlanDrawer();
+    } else {
+        minimizePlanDrawer();
+    }
 }
 
 function closePlanDrawer() {
     const drawer = document.getElementById('planDrawer');
+    const dockPill = document.getElementById('planDockPill');
+    const toggleBtn = document.getElementById('btnTogglePlan');
+
+    _isPlanMinimized = false;
     if (drawer) {
         drawer.classList.remove('active');
         drawer.classList.remove('minimized');
-        _isPlanMinimized = false;
-        const minBtn = document.getElementById('planMinBtn');
-        if (minBtn) minBtn.textContent = '🗕 MIN';
     }
+    if (dockPill) dockPill.style.display = 'none';
+    if (toggleBtn) {
+        toggleBtn.classList.remove('active');
+        toggleBtn.textContent = 'PLAN';
+    }
+
     if (_planPollInterval) {
         clearInterval(_planPollInterval);
         _planPollInterval = null;
@@ -1012,32 +1072,14 @@ async function togglePlanDrawer() {
     if (!drawer) return;
 
     if (_isPlanMinimized) {
-        togglePlanMinimize();
+        restorePlanDrawer();
         return;
     }
 
-    drawer.classList.toggle('active');
     if (drawer.classList.contains('active')) {
-        await refreshPlanFromBackend();
-    }
-}
-
-function togglePlanMinimize() {
-    const drawer = document.getElementById('planDrawer');
-    const minBtn = document.getElementById('planMinBtn');
-    const minBadge = document.getElementById('planMinBadge');
-    if (!drawer) return;
-
-    _isPlanMinimized = !_isPlanMinimized;
-    if (_isPlanMinimized) {
-        drawer.classList.add('minimized');
-        if (minBtn) minBtn.textContent = '⤢ RESTORE';
-        if (minBadge) minBadge.style.display = 'inline-block';
-        if (_isPlanEditing) cancelPlanEdit();
+        minimizePlanDrawer();
     } else {
-        drawer.classList.remove('minimized');
-        if (minBtn) minBtn.textContent = '🗕 MIN';
-        if (minBadge) minBadge.style.display = 'none';
+        restorePlanDrawer();
     }
 }
 
@@ -1058,8 +1100,44 @@ function togglePlanExpand() {
 
 function handleDrawerTitleClick() {
     if (_isPlanMinimized) {
-        togglePlanMinimize();
+        restorePlanDrawer();
     }
+}
+
+function toggleGoalFold() {
+    const card = document.getElementById('planGoalCard');
+    const btn = document.getElementById('goalFoldBtn');
+    if (!card) return;
+
+    const isFolded = card.classList.toggle('folded');
+    if (btn) btn.textContent = isFolded ? '▸' : '▾';
+}
+
+function toggleStepFold(stepElementId) {
+    const el = document.getElementById(stepElementId);
+    if (!el) return;
+
+    const isFolded = el.classList.toggle('folded');
+    const foldIcon = el.querySelector('.step-fold-icon');
+    if (foldIcon) foldIcon.textContent = isFolded ? '▸' : '▾';
+}
+
+function toggleFoldAllSteps() {
+    _allStepsFolded = !_allStepsFolded;
+    const steps = document.querySelectorAll('.plan-step');
+    const btn = document.getElementById('toggleFoldAllBtn');
+
+    steps.forEach(s => {
+        if (_allStepsFolded) {
+            s.classList.add('folded');
+        } else {
+            s.classList.remove('folded');
+        }
+        const icon = s.querySelector('.step-fold-icon');
+        if (icon) icon.textContent = _allStepsFolded ? '▸' : '▾';
+    });
+
+    if (btn) btn.textContent = _allStepsFolded ? '⊞ UNFOLD STEPS' : '⊟ FOLD STEPS';
 }
 
 async function refreshPlanFromBackend() {
