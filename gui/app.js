@@ -1496,18 +1496,34 @@ async function refreshHistory() {
 let _sidePanelOpen = false;
 let _currentTab = 'memory';
 
-function toggleSidePanel() {
+function toggleSidePanel(forceTab = null) {
     const panel = document.getElementById('sidePanel');
     const icon = document.getElementById('sidePanelIcon');
+    const memBtn = document.getElementById('btnToggleMemory');
+
+    if (forceTab) {
+        switchSideTab(forceTab);
+        if (!_sidePanelOpen) {
+            _sidePanelOpen = true;
+            if (panel) panel.classList.add('open');
+            if (icon) icon.textContent = '✕';
+            if (memBtn) memBtn.classList.add('active');
+            refreshSideContent();
+            return;
+        }
+    }
+
     _sidePanelOpen = !_sidePanelOpen;
 
     if (_sidePanelOpen) {
         if (panel) panel.classList.add('open');
         if (icon) icon.textContent = '✕';
+        if (memBtn) memBtn.classList.add('active');
         refreshSideContent();
     } else {
         if (panel) panel.classList.remove('open');
         if (icon) icon.textContent = '💾';
+        if (memBtn) memBtn.classList.remove('active');
     }
 }
 
