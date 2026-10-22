@@ -171,6 +171,41 @@ def audio_to_bytes(audio_data: np.ndarray, sample_rate: int = config.SAMPLE_RATE
     return buffer.getvalue()
 
 
+def wav_bytes_to_audio(wav_bytes: bytes, target_sample_rate: int = config.SAMPLE_RATE) -> np.ndarray:
+    """
+    Decode WAV bytes to a float32 numpy array, normalizing to mono and target_sample_rate.
+    Works entirely in memory without requiring external ffmpeg binaries.
+    """
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        channels = wf.getnchannels()
+        framerate = wf.getframerate()
+        nframes = wf.getnframes()
+        frames = wf.readframes(nframes)
+        sampwidth = wf.getsampwidth()
+
+        if sampwidth == 2:
+            raw = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sampwidth == 4:
+            raw = np.frombuffer(frames, dtype=np.int32).astype(np.float32) / 2147483648.0
+        elif sampwidth == 1:
+            raw = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        else:
+            raw = np.frombuffer(frames, dtype=np.float32)
+
+        if channels > 1:
+            raw = raw.reshape(-1, channels).mean(axis=1)
+
+        if framerate != target_sample_rate and len(raw) > 0:
+            target_len = int(len(raw) * target_sample_rate / framerate)
+            raw = np.interp(
+                np.linspace(0, len(raw), target_len, endpoint=False),
+                np.arange(len(raw)),
+                raw,
+            ).astype(np.float32)
+
+        return raw.astype(np.float32)
+
+
 def list_audio_devices():
     """List available audio input devices."""
     devices = sd.query_devices()
