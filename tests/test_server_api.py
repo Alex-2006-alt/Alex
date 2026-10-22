@@ -52,9 +52,29 @@ class StubTaskManager:
 class StubBrain:
     def __init__(self):
         self.plan = None
+        self.executed = False
 
     def get_current_plan(self):
         return self.plan
+
+    def set_plan(self, data):
+        self.plan = {
+            "goal": data.get("goal", "Custom Plan"),
+            "steps": data.get("steps", []),
+            "status": "pending",
+            "summary": f"{len(data.get('steps', []))} steps",
+        }
+        return self.plan
+
+    def execute_plan_async(self, callback=None):
+        if not self.plan or not self.plan.get("steps"):
+            return False
+        self.executed = True
+        self.plan["status"] = "running"
+        return True
+
+    def clear_plan(self):
+        self.plan = None
 
 
 class StubAssistant:
@@ -218,3 +238,42 @@ class TestMemoryEndpoints:
         body = client.delete("/api/tasks/t1").get_json()
         assert body["cancelled"] is True
         assert assistant._task_manager.cancelled == ["t1"]
+
+
+class TestPlanEndpoints:
+    def test_get_idle_plan(self, stub):
+        client, _ = stub
+        res = client.get("/api/plan")
+        assert res.status_code == 200
+        body = res.get_json()
+        assert body["status"] == "idle"
+
+    def test_set_and_get_plan(self, stub):
+        client, _ = stub
+        plan_data = {
+            "goal": "Test Goal",
+            "steps": [{"action": "web_search", "description": "Search google"}],
+        }
+        res = client.post("/api/plan", json=plan_data)
+        assert res.status_code == 200
+        body = res.get_json()
+        assert body["success"] is True
+        assert body["plan"]["goal"] == "Test Goal"
+
+        get_res = client.get("/api/plan").get_json()
+        assert get_res["goal"] == "Test Goal"
+
+    def test_execute_plan(self, stub):
+        client, _ = stub
+        client.post("/api/plan", json={"goal": "Exec", "steps": [{"action": "web_search"}]})
+        exec_res = client.post("/api/plan/execute")
+        assert exec_res.status_code == 200
+        assert exec_res.get_json()["status"] == "running"
+
+    def test_clear_plan(self, stub):
+        client, _ = stub
+        client.post("/api/plan", json={"goal": "To Clear", "steps": []})
+        del_res = client.delete("/api/plan")
+        assert del_res.status_code == 200
+        assert del_res.get_json()["cleared"] is True
+

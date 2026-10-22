@@ -1127,7 +1127,76 @@ RULES:
         return "\n".join(lines)
 
     def get_current_plan(self) -> dict | None:
-        """Return the plan for the request in flight, or None when idle."""
+        """Return the plan for the request in flight, or the last active plan."""
         with self._plan_lock:
-            plan = self._current_plan
+            plan = self._current_plan or getattr(self, "_last_plan", None)
         return plan.to_dict() if plan else None
+
+    def set_plan(self, plan_data: dict) -> dict:
+        """Create or update the strategic plan from external/user input."""
+        from core.planner import Plan, Step, StepStatus
+        goal = plan_data.get("goal") or "Custom Strategic Plan"
+        raw_steps = plan_data.get("steps") or []
+        steps = []
+        for i, s in enumerate(raw_steps, start=1):
+            sid = s.get("id") or i
+            action = s.get("action") or "unknown"
+            params = s.get("params") or {}
+            desc = s.get("description") or f"Step {sid}"
+            raw_status = (s.get("status") or "pending").lower()
+            try:
+                status = StepStatus(raw_status)
+            except ValueError:
+                status = StepStatus.PENDING
+            steps.append(Step(
+                id=sid,
+                action=action,
+                params=params,
+                description=desc,
+                status=status,
+                depends_on=s.get("depends_on") or [],
+            ))
+        plan = Plan(goal=goal, steps=steps, status="pending")
+        with self._plan_lock:
+            self._current_plan = plan
+            self._last_plan = plan
+        self._notify_plan("plan_updated", plan.to_dict())
+        return plan.to_dict()
+
+    def execute_plan_async(self, callback: Callable | None = None) -> bool:
+        """Execute the current strategic plan on a background worker thread."""
+        with self._plan_lock:
+            plan = self._current_plan or getattr(self, "_last_plan", None)
+        if not plan or not plan.steps:
+            return False
+
+        def _runner():
+            plan.status = "running"
+            with self._plan_lock:
+                self._current_plan = plan
+            self._notify_plan("plan_started", plan.to_dict())
+            step_results = {}
+            try:
+                self._execute_plan(plan, step_results)
+                plan.status = "done" if not plan.has_failures() else "partial"
+            except Exception as e:
+                log.error(f"Manual plan execution error: {e}")
+                plan.status = "failed"
+            with self._plan_lock:
+                self._last_plan = plan
+            self._notify_plan("plan_done", plan.to_dict())
+            if callback:
+                try:
+                    callback(plan.to_dict())
+                except Exception:
+                    pass
+
+        threading.Thread(target=_runner, daemon=True).start()
+        return True
+
+    def clear_plan(self):
+        """Clear the current and last plan."""
+        with self._plan_lock:
+            self._current_plan = None
+            self._last_plan = None
+        self._notify_plan("plan_cleared", None)

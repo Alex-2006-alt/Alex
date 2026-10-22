@@ -910,52 +910,470 @@ function initKeyboardShortcuts() {
         if (e.ctrlKey && key === 'l') { e.preventDefault(); if (dom.chatInput) dom.chatInput.focus(); }
         if (e.ctrlKey && key === 'm') { e.preventDefault(); toggleListening(); }
         if (e.ctrlKey && key === 'k') { e.preventDefault(); toggleSidePanel(); }
+        if (e.ctrlKey && key === 'p') { e.preventDefault(); togglePlanDrawer(); }
         if (key === 'escape') { setState('standby'); closePlanDrawer(); }
     });
 }
 
-// ============ PLAN VIEWER ============
+// ============ STRATEGIC PLAN MANAGER (VIEW, EDIT, MINIMIZE, BACKEND) ============
+let _currentPlanData = null;
+let _isPlanEditing = false;
+let _isPlanMinimized = false;
+let _isPlanExpanded = false;
+let _planPollInterval = null;
+let _allStepsFolded = false;
+
 function renderPlan(plan) {
-    if (!plan || !plan.steps || plan.steps.length === 0) return;
+    if (!plan) return;
+    _currentPlanData = plan;
 
     const drawer = document.getElementById('planDrawer');
     const goalText = document.getElementById('planGoalText');
     const planSteps = document.getElementById('planSteps');
     const planSummary = document.getElementById('planSummary');
+    const minBadge = document.getElementById('planMinBadge');
+    const statusBadge = document.getElementById('planStatusBadge');
+    const progressContainer = document.getElementById('planProgressContainer');
+    const progressBar = document.getElementById('planProgressBar');
+    const dockStepCount = document.getElementById('dockStepCount');
 
-    if (!drawer || !goalText || !planSteps || !planSummary) return;
+    if (!drawer) return;
 
-    goalText.textContent = plan.goal ? plan.goal.substring(0, 60) : 'ACTIVE PLAN';
-    planSummary.textContent = plan.summary || `${plan.steps.length} steps`;
+    const steps = plan.steps || [];
+    const status = (plan.status || 'idle').toLowerCase();
+    const summaryText = `${steps.length} STEP${steps.length !== 1 ? 'S' : ''} • ${status.toUpperCase()}`;
 
-    const statusEmoji = { done: '✅', running: '🔄', failed: '❌', pending: '⏳', skipped: '➡️' };
-    const statusClass = { done: 'step-done', running: 'step-running', failed: 'step-failed', pending: 'step-pending', skipped: 'step-skipped' };
+    if (goalText) goalText.textContent = plan.goal || 'Custom Strategic Plan';
+    if (planSummary) planSummary.textContent = summaryText;
+    if (minBadge) minBadge.textContent = summaryText;
+    if (dockStepCount) dockStepCount.textContent = `${steps.length} STEP${steps.length !== 1 ? 'S' : ''}`;
 
-    planSteps.innerHTML = plan.steps.map(step => `
-        <div class="plan-step ${statusClass[step.status] || 'step-pending'}" id="step-${escapeHtml(String(step.id))}">
-            <div class="step-header">
-                <span class="step-status-icon">${statusEmoji[step.status] || '⏳'}</span>
-                <span class="step-num">STEP ${escapeHtml(String(step.id))}</span>
-                <span class="step-action">${escapeHtml(String(step.action || ''))}</span>
-                ${step.duration ? `<span class="step-duration">${escapeHtml(String(step.duration))}s</span>` : ''}
-            </div>
-            <div class="step-desc">${escapeHtml(String(step.description || ''))}</div>
-            ${step.result ? `<div class="step-result">${escapeHtml(String(step.result).substring(0, 120))}</div>` : ''}
-            ${step.error ? `<div class="step-error">⚠️ ${escapeHtml(step.error)}</div>` : ''}
-        </div>
-    `).join('');
+    if (statusBadge) {
+        statusBadge.textContent = status.toUpperCase();
+        statusBadge.className = `plan-status-badge status-${status}`;
+    }
 
+    if (progressContainer && progressBar) {
+        if (steps.length > 0) {
+            const completedCount = steps.filter(s => s.status === 'done').length;
+            const pct = Math.round((completedCount / steps.length) * 100);
+            progressBar.style.width = `${pct}%`;
+            progressContainer.style.display = 'block';
+        } else {
+            progressContainer.style.display = 'none';
+        }
+    }
+
+    if (planSteps) {
+        if (steps.length === 0) {
+            planSteps.innerHTML = '<div class="plan-empty">No steps currently defined. Click ✎ EDIT to design a strategic plan.</div>';
+        } else {
+            const statusEmoji = { done: '✅', running: '🔄', failed: '❌', pending: '⏳', skipped: '➡️' };
+            const statusClass = { done: 'step-done', running: 'step-running', failed: 'step-failed', pending: 'step-pending', skipped: 'step-skipped' };
+
+            planSteps.innerHTML = steps.map(step => {
+                const hasParams = step.params && typeof step.params === 'object' && Object.keys(step.params).length > 0;
+                const paramsStr = hasParams ? JSON.stringify(step.params, null, 2) : '';
+
+                return `
+                    <div class="plan-step ${statusClass[step.status] || 'step-pending'}" id="step-${escapeHtml(String(step.id))}">
+                        <div class="step-header">
+                            <span class="step-status-icon">${statusEmoji[step.status] || '⏳'}</span>
+                            <span class="step-num">STEP ${escapeHtml(String(step.id))}</span>
+                            <span class="step-action-badge">${escapeHtml(String(step.action || 'system'))}</span>
+                            ${step.duration ? `<span class="step-duration">${escapeHtml(String(step.duration))}s</span>` : ''}
+                            <span class="step-fold-icon" onclick="toggleStepFold('step-${escapeHtml(String(step.id))}')" title="Fold / Unfold Step Details">▾</span>
+                        </div>
+                        <div class="step-desc">${escapeHtml(String(step.description || 'No description provided'))}</div>
+                        ${hasParams ? `<div class="step-params-box"><strong>ARGS:</strong> ${escapeHtml(paramsStr)}</div>` : ''}
+                        ${step.result ? `<div class="step-result"><strong>RESULT:</strong> ${escapeHtml(String(step.result))}</div>` : ''}
+                        ${step.error ? `<div class="step-error">⚠️ <strong>ERROR:</strong> ${escapeHtml(String(step.error))}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+    }
+
+    if (!_isPlanMinimized) {
+        drawer.classList.add('active');
+        drawer.classList.remove('minimized');
+    }
+}
+
+function minimizePlanDrawer() {
+    const drawer = document.getElementById('planDrawer');
+    const dockPill = document.getElementById('planDockPill');
+    const toggleBtn = document.getElementById('btnTogglePlan');
+    if (!drawer) return;
+
+    _isPlanMinimized = true;
+    drawer.classList.remove('active');
+    drawer.classList.add('minimized');
+
+    if (dockPill) dockPill.style.display = 'inline-flex';
+    if (toggleBtn) {
+        toggleBtn.classList.add('active');
+        toggleBtn.textContent = `PLAN (${_currentPlanData?.steps?.length || 0})`;
+    }
+    if (_isPlanEditing) cancelPlanEdit();
+}
+
+function restorePlanDrawer() {
+    const drawer = document.getElementById('planDrawer');
+    const dockPill = document.getElementById('planDockPill');
+    const toggleBtn = document.getElementById('btnTogglePlan');
+    if (!drawer) return;
+
+    _isPlanMinimized = false;
+    drawer.classList.remove('minimized');
     drawer.classList.add('active');
+
+    if (dockPill) dockPill.style.display = 'none';
+    if (toggleBtn) {
+        toggleBtn.classList.remove('active');
+        toggleBtn.textContent = 'PLAN';
+    }
+
+    refreshPlanFromBackend();
+}
+
+function togglePlanMinimize() {
+    if (_isPlanMinimized) {
+        restorePlanDrawer();
+    } else {
+        minimizePlanDrawer();
+    }
 }
 
 function closePlanDrawer() {
     const drawer = document.getElementById('planDrawer');
-    if (drawer) drawer.classList.remove('active');
+    const dockPill = document.getElementById('planDockPill');
+    const toggleBtn = document.getElementById('btnTogglePlan');
+
+    _isPlanMinimized = false;
+    if (drawer) {
+        drawer.classList.remove('active');
+        drawer.classList.remove('minimized');
+    }
+    if (dockPill) dockPill.style.display = 'none';
+    if (toggleBtn) {
+        toggleBtn.classList.remove('active');
+        toggleBtn.textContent = 'PLAN';
+    }
+
+    if (_planPollInterval) {
+        clearInterval(_planPollInterval);
+        _planPollInterval = null;
+    }
 }
 
-function togglePlanDrawer() {
+async function togglePlanDrawer() {
     const drawer = document.getElementById('planDrawer');
-    if (drawer) drawer.classList.toggle('active');
+    if (!drawer) return;
+
+    if (_isPlanMinimized) {
+        restorePlanDrawer();
+        return;
+    }
+
+    if (drawer.classList.contains('active')) {
+        minimizePlanDrawer();
+    } else {
+        restorePlanDrawer();
+    }
+}
+
+function togglePlanExpand() {
+    const drawer = document.getElementById('planDrawer');
+    const expandBtn = document.getElementById('planExpandBtn');
+    if (!drawer) return;
+
+    _isPlanExpanded = !_isPlanExpanded;
+    if (_isPlanExpanded) {
+        drawer.classList.add('expanded');
+        if (expandBtn) expandBtn.textContent = '⤢ NORM';
+    } else {
+        drawer.classList.remove('expanded');
+        if (expandBtn) expandBtn.textContent = '⛶ WIDE';
+    }
+}
+
+function handleDrawerTitleClick() {
+    if (_isPlanMinimized) {
+        restorePlanDrawer();
+    }
+}
+
+function toggleGoalFold() {
+    const card = document.getElementById('planGoalCard');
+    const btn = document.getElementById('goalFoldBtn');
+    if (!card) return;
+
+    const isFolded = card.classList.toggle('folded');
+    if (btn) btn.textContent = isFolded ? '▸' : '▾';
+}
+
+function toggleStepFold(stepElementId) {
+    const el = document.getElementById(stepElementId);
+    if (!el) return;
+
+    const isFolded = el.classList.toggle('folded');
+    const foldIcon = el.querySelector('.step-fold-icon');
+    if (foldIcon) foldIcon.textContent = isFolded ? '▸' : '▾';
+}
+
+function toggleFoldAllSteps() {
+    _allStepsFolded = !_allStepsFolded;
+    const steps = document.querySelectorAll('.plan-step');
+    const btn = document.getElementById('toggleFoldAllBtn');
+
+    steps.forEach(s => {
+        if (_allStepsFolded) {
+            s.classList.add('folded');
+        } else {
+            s.classList.remove('folded');
+        }
+        const icon = s.querySelector('.step-fold-icon');
+        if (icon) icon.textContent = _allStepsFolded ? '▸' : '▾';
+    });
+
+    if (btn) btn.textContent = _allStepsFolded ? '⊞ UNFOLD STEPS' : '⊟ FOLD STEPS';
+}
+
+async function refreshPlanFromBackend() {
+    try {
+        const data = await apiCall('/api/plan');
+        if (data) {
+            renderPlan(data);
+        }
+    } catch (e) {
+        console.warn('Failed to refresh plan from backend:', e);
+    }
+}
+
+function togglePlanEditMode() {
+    _isPlanEditing = !_isPlanEditing;
+    const viewMode = document.getElementById('planViewMode');
+    const editMode = document.getElementById('planEditMode');
+    const editBtn = document.getElementById('planEditBtn');
+
+    if (_isPlanEditing) {
+        if (_isPlanMinimized) togglePlanMinimize();
+        if (viewMode) viewMode.style.display = 'none';
+        if (editMode) editMode.style.display = 'flex';
+        if (editBtn) editBtn.textContent = '👁 VIEW';
+
+        const goalInput = document.getElementById('editPlanGoal');
+        if (goalInput) goalInput.value = _currentPlanData?.goal || 'Automate and execute strategic workflow';
+
+        const container = document.getElementById('editPlanSteps');
+        if (container) {
+            container.innerHTML = '';
+            const existingSteps = _currentPlanData?.steps || [];
+            if (existingSteps.length === 0) {
+                addPlanEditStep('web_search', 'Search for necessary documentation and information', { query: 'ALEX AI system instructions' });
+                addPlanEditStep('system_info', 'Retrieve current system diagnostics and resource health', {});
+            } else {
+                existingSteps.forEach(s => addPlanEditStep(s.action, s.description, s.params));
+            }
+        }
+    } else {
+        if (viewMode) viewMode.style.display = 'flex';
+        if (editMode) editMode.style.display = 'none';
+        if (editBtn) editBtn.textContent = '✎ EDIT';
+    }
+}
+
+const COMMON_PLAN_ACTIONS = [
+    'web_search',
+    'system_info',
+    'app_open',
+    'shell_cmd',
+    'file_read',
+    'file_write',
+    'screen_vision',
+    'ask_user',
+    'custom'
+];
+
+function addPlanEditStep(action = 'web_search', description = '', params = {}) {
+    const container = document.getElementById('editPlanSteps');
+    if (!container) return;
+
+    const stepIndex = container.children.length + 1;
+    const item = document.createElement('div');
+    item.className = 'edit-step-item';
+
+    const isKnownAction = COMMON_PLAN_ACTIONS.includes(action);
+    const selectedAction = isKnownAction ? action : 'custom';
+    const paramsJson = params && Object.keys(params).length > 0 ? JSON.stringify(params) : '';
+
+    item.innerHTML = `
+        <div class="edit-step-top-row">
+            <span class="edit-step-num">STEP ${stepIndex}</span>
+            <select class="edit-step-action-select" onchange="handleStepActionSelect(this)">
+                ${COMMON_PLAN_ACTIONS.map(act => `<option value="${act}" ${act === selectedAction ? 'selected' : ''}>${act.toUpperCase()}</option>`).join('')}
+            </select>
+            <input type="text" class="edit-step-action-input" placeholder="Custom action..." value="${escapeHtml(action)}" style="${selectedAction === 'custom' ? 'display:block;' : 'display:none;'}">
+            <button type="button" class="edit-step-del-btn" onclick="removePlanEditStep(this)" title="Delete Step">🗑 DEL</button>
+        </div>
+        <input type="text" class="edit-step-desc-input" placeholder="Step description..." value="${escapeHtml(description)}">
+        <input type="text" class="edit-step-params-input" placeholder='Arguments JSON (e.g. {"query": "weather"})' value="${escapeHtml(paramsJson)}">
+    `;
+    container.appendChild(item);
+}
+
+function handleStepActionSelect(selectEl) {
+    const row = selectEl.closest('.edit-step-top-row');
+    if (!row) return;
+    const customInput = row.querySelector('.edit-step-action-input');
+    if (!customInput) return;
+
+    if (selectEl.value === 'custom') {
+        customInput.style.display = 'block';
+        customInput.focus();
+    } else {
+        customInput.style.display = 'none';
+        customInput.value = selectEl.value;
+    }
+}
+
+function removePlanEditStep(btn) {
+    const item = btn.closest('.edit-step-item');
+    if (item) {
+        item.remove();
+        reindexPlanEditSteps();
+    }
+}
+
+function reindexPlanEditSteps() {
+    const container = document.getElementById('editPlanSteps');
+    if (!container) return;
+    const items = container.querySelectorAll('.edit-step-item');
+    items.forEach((item, idx) => {
+        const numEl = item.querySelector('.edit-step-num');
+        if (numEl) numEl.textContent = `STEP ${idx + 1}`;
+    });
+}
+
+async function savePlanToBackend() {
+    const goalInput = document.getElementById('editPlanGoal');
+    const container = document.getElementById('editPlanSteps');
+    const saveBtn = document.getElementById('planSaveBtn');
+
+    const goal = (goalInput ? goalInput.value.trim() : '') || 'Custom Strategic Plan';
+    const stepItems = container ? container.querySelectorAll('.edit-step-item') : [];
+    const steps = [];
+
+    stepItems.forEach((item, idx) => {
+        const actionSelect = item.querySelector('.edit-step-action-select');
+        const customActionInput = item.querySelector('.edit-step-action-input');
+        const descInput = item.querySelector('.edit-step-desc-input');
+        const paramsInput = item.querySelector('.edit-step-params-input');
+
+        let action = actionSelect?.value || 'web_search';
+        if (action === 'custom' && customActionInput?.value.trim()) {
+            action = customActionInput.value.trim();
+        }
+
+        const description = descInput ? descInput.value.trim() : '';
+        let params = {};
+        if (paramsInput && paramsInput.value.trim()) {
+            try {
+                params = JSON.parse(paramsInput.value.trim());
+            } catch (e) {
+                params = { raw: paramsInput.value.trim() };
+            }
+        }
+
+        if (action || description) {
+            steps.push({
+                id: idx + 1,
+                action: action || 'system_info',
+                description: description || `Step ${idx + 1}`,
+                params: params,
+                status: 'pending'
+            });
+        }
+    });
+
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = '💾 SAVING...';
+    }
+
+    try {
+        const res = await apiCall('/api/plan', 'POST', { goal, steps });
+        if (res && res.success && res.plan) {
+            _currentPlanData = res.plan;
+            renderPlan(res.plan);
+            togglePlanEditMode();
+            addMessage('SYSTEM', `Strategic plan "${res.plan.goal}" saved to backend with ${res.plan.steps.length} step(s).`, 'system-msg');
+        } else {
+            addMessage('SYSTEM', `Failed to save plan: ${res?.error || 'Unknown error'}`, 'error-msg');
+        }
+    } catch (e) {
+        addMessage('SYSTEM', `Error saving plan to backend: ${e.message}`, 'error-msg');
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '💾 SAVE TO BACKEND';
+        }
+    }
+}
+
+async function executeCurrentPlan() {
+    const runBtn = document.getElementById('planRunBtn');
+    if (runBtn) {
+        runBtn.disabled = true;
+        runBtn.textContent = '⏳ RUNNING...';
+    }
+
+    try {
+        const res = await apiCall('/api/plan/execute', 'POST');
+        if (res && res.status === 'running') {
+            addMessage('SYSTEM', 'Autonomous execution of strategic plan started.', 'system-msg');
+            await refreshPlanFromBackend();
+
+            // Poll progress every 1.5 seconds until done
+            if (_planPollInterval) clearInterval(_planPollInterval);
+            _planPollInterval = setInterval(async () => {
+                const planData = await apiCall('/api/plan');
+                if (planData) {
+                    renderPlan(planData);
+                    const status = (planData.status || '').toLowerCase();
+                    if (status === 'completed' || status === 'failed' || status === 'idle') {
+                        clearInterval(_planPollInterval);
+                        _planPollInterval = null;
+                        if (runBtn) {
+                            runBtn.disabled = false;
+                            runBtn.textContent = '▶ RUN';
+                        }
+                        addMessage('SYSTEM', `Strategic plan execution ended with status: ${status.toUpperCase()}.`, status === 'failed' ? 'error-msg' : 'system-msg');
+                    }
+                }
+            }, 1500);
+        } else {
+            addMessage('SYSTEM', `Cannot execute plan: ${res?.error || 'No steps to run.'}`, 'error-msg');
+            if (runBtn) {
+                runBtn.disabled = false;
+                runBtn.textContent = '▶ RUN';
+            }
+        }
+    } catch (e) {
+        addMessage('SYSTEM', `Execution error: ${e.message}`, 'error-msg');
+        if (runBtn) {
+            runBtn.disabled = false;
+            runBtn.textContent = '▶ RUN';
+        }
+    }
+}
+
+function cancelPlanEdit() {
+    togglePlanEditMode();
+    if (_currentPlanData) {
+        renderPlan(_currentPlanData);
+    }
 }
 
 // ============ MEMORY PANEL ============

@@ -422,15 +422,50 @@ def api_task_cancel(task_id):
 
 # ── Plan + Status APIs ────────────────────────────────────────────────────────
 
-@app.route("/api/plan")
-def api_plan_current():
+@app.route("/api/plan", methods=["GET", "POST", "DELETE"])
+def api_plan_manage():
     try:
         assistant = _get_assistant()
+        if request.method == "POST":
+            data = request.get_json() or {}
+            if hasattr(assistant.brain, "set_plan"):
+                plan_dict = assistant.brain.set_plan(data)
+                return jsonify({"success": True, "plan": plan_dict})
+            return jsonify({"error": "Brain does not support plan editing"}), 400
+
+        elif request.method == "DELETE":
+            if hasattr(assistant.brain, "clear_plan"):
+                assistant.brain.clear_plan()
+            return jsonify({"cleared": True})
+
+        # GET method
         plan = assistant.brain.get_current_plan()
         if plan:
             return jsonify(plan)
-        return jsonify({"status": "idle", "message": "No active plan"})
+        return jsonify({
+            "status": "idle",
+            "goal": "Custom Strategic Plan",
+            "summary": "0 steps",
+            "steps": [],
+            "message": "No active plan",
+        })
     except Exception as e:
+        log.error(f"Plan API error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/plan/execute", methods=["POST"])
+def api_plan_execute():
+    try:
+        assistant = _get_assistant()
+        if hasattr(assistant.brain, "execute_plan_async"):
+            started = assistant.brain.execute_plan_async()
+            if started:
+                return jsonify({"status": "running", "message": "Plan execution started"})
+            return jsonify({"error": "No valid plan or steps to execute"}), 400
+        return jsonify({"error": "Brain does not support manual plan execution"}), 400
+    except Exception as e:
+        log.error(f"Plan execution error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
