@@ -7,7 +7,7 @@
     <meta name="description" content="ALEX — Personal AI Assistant with JARVIS-style holographic interface">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=4">
+    <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
     <!-- Ambient Background -->
@@ -212,12 +212,15 @@
 
         <!-- Right Panel — Conversation Log & Side Drawer -->
         <aside class="panel panel-right" id="panelRight">
-            <div class="panel-header">
-                <div class="panel-dot"></div>
-                <span>COMMUNICATION LOG</span>
-                <div class="panel-line"></div>
-                <button class="panel-toggle-btn" id="btnTogglePlan" onclick="togglePlanDrawer()" title="Strategic Plan View">PLAN</button>
-                <button class="panel-toggle-btn" id="btnToggleMemory" onclick="toggleSidePanel()" title="Memory & Tasks Panel (Ctrl+K)">MEMORY</button>
+            <div class="panel-header comm-header">
+                <div class="panel-header-title">
+                    <div class="panel-dot"></div>
+                    <span class="comm-title-text">COMM LOG</span>
+                </div>
+                <div class="panel-header-actions">
+                    <button class="panel-toggle-btn" id="btnTogglePlan" onclick="togglePlanDrawer()" title="Strategic Plan View (Ctrl+P)">📋 PLAN</button>
+                    <button class="panel-toggle-btn memory-btn" id="btnToggleMemory" onclick="toggleSidePanel('memory')" title="Memory Core & Tasks (Ctrl+K)">🧠 MEMORY</button>
+                </div>
             </div>
 
             <div class="chat-container" id="chatContainer">
@@ -257,7 +260,7 @@
                 <div class="module-chip active" id="modLLM">LLM</div>
                 <div class="module-chip active" id="modWAKE">WAKE</div>
                 <div class="module-chip active" id="modACT">ACT</div>
-                <div class="module-chip active" id="modMEM" title="Memory Core">MEM</div>
+                <div class="module-chip active" id="modMEM" onclick="toggleSidePanel('memory')" title="Click to open Memory Core (Ctrl+K)" style="cursor: pointer;">MEM</div>
             </div>
         </aside>
 
@@ -421,6 +424,6 @@
         </div>
     </footer>
 
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=5"></script>
 </body>
 </html>
