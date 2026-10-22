@@ -46,3 +46,10 @@ win10toast>=0.9             # Windows desktop toast notifications
 pandas>=2.0                 # Data analysis
 openpyxl>=3.1               # Excel read/write support
 
+# ─── Phase 6: Background Service + Screen Vision ───────────────
+pystray>=0.19               # System tray icon (cross-platform)
+mss>=9.0                    # Fast multi-monitor screenshot capture
+keyboard>=0.13              # Global hotkey listener (no admin needed)
+Pillow>=10.0                # Image processing (vision pipeline)
+
+

@@ -34,6 +34,9 @@ class Brain:
         self.conversation_history: list[dict] = []
         self._client = None
         self._chat = None
+        self._gemini_client = None
+        self._gemini_chat = None
+        self._ollama_client = None
 
         # Optional integrations (lazy-loaded)
         self._tool_registry = None
@@ -98,7 +101,9 @@ class Brain:
     def _init_client(self):
         if self._client is not None:
             return
-        if self.provider == "gemini":
+        if self.provider in ("hybrid", "dual"):
+            self._init_hybrid()
+        elif self.provider == "gemini":
             self._init_gemini()
         elif self.provider == "ollama":
             self._init_ollama()
@@ -167,7 +172,7 @@ RULES:
 
             genai.configure(api_key=config.GEMINI_API_KEY)
             system_prompt = self._build_system_prompt()
-            self._client = genai.GenerativeModel(
+            self._gemini_client = genai.GenerativeModel(
                 model_name=config.GEMINI_MODEL,
                 system_instruction=system_prompt,
                 generation_config=genai.GenerationConfig(
@@ -175,7 +180,9 @@ RULES:
                     max_output_tokens=config.LLM_MAX_TOKENS,
                 ),
             )
-            self._chat = self._client.start_chat(history=[])
+            self._gemini_chat = self._gemini_client.start_chat(history=[])
+            self._client = self._gemini_client
+            self._chat = self._gemini_chat
             log.info(f"✅ Gemini initialized ({config.GEMINI_MODEL})")
         except Exception as e:
             log.error(f"Gemini init failed: {e}")
@@ -185,11 +192,35 @@ RULES:
         try:
             import ollama
             ollama.list()
-            self._client = ollama
+            self._ollama_client = ollama
+            self._client = self._ollama_client
             log.info(f"✅ Ollama initialized ({config.OLLAMA_MODEL})")
         except Exception as e:
             log.error(f"Ollama init failed: {e}")
             raise
+
+    def _init_hybrid(self):
+        """Initialize both Gemini (cloud) and Ollama/Qwen (local) for simultaneous dual-model operation."""
+        gemini_ok = False
+        ollama_ok = False
+
+        try:
+            self._init_gemini()
+            gemini_ok = True
+        except Exception as e:
+            log.warning(f"⚠️ Gemini init warning in hybrid mode: {e}")
+
+        try:
+            self._init_ollama()
+            ollama_ok = True
+        except Exception as e:
+            log.warning(f"⚠️ Ollama init warning in hybrid mode: {e}")
+
+        if not gemini_ok and not ollama_ok:
+            raise RuntimeError("Dual model initialization failed: neither Gemini nor Ollama could be initialized.")
+
+        self._client = "hybrid"
+        log.info(f"🚀 Dual-Model Hybrid Brain active: Cloud Gemini ({config.GEMINI_MODEL}) + Local Qwen ({config.OLLAMA_MODEL})")
 
     def _init_openai(self):
         try:
@@ -300,20 +331,130 @@ RULES:
             return
 
         try:
+            # In hybrid mode, use local Qwen to keep learning offline, private, and free of API quota
+            caller = self._call_ollama_single if (self.provider in ("hybrid", "dual") or self.provider == "ollama") else self._raw_llm_call
             self._memory.learn_from_interaction(
                 user_text=user_input,
                 assistant_text=assistant_response,
-                llm_caller=self._raw_llm_call,
+                llm_caller=caller,
             )
         except Exception as e:
             log.debug(f"Background learning trigger failed: {e}")
 
     # ─── FAST PATH ───────────────────────────────────────────────────────────
 
+    def _think_fast_hybrid(self, user_input: str, enriched_input: str) -> dict:
+        """
+        Simultaneously runs Gemini and local Qwen (Ollama) in parallel threads.
+        - If local Qwen completes first with an actionable tool command (e.g. open app, music),
+          executes it immediately without waiting for cloud latency.
+        - If either provider fails (quota, network, rate-limit), the other seamlessly fulfills the request.
+        - Automatically picks the fastest actionable or valid response.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def run_gemini():
+            try:
+                t0 = time.time()
+                raw = self._call_gemini_with_history(enriched_input)
+                parsed = self._parse_response(raw)
+                parsed = self._repair_unfulfilled_promise(user_input, enriched_input, parsed)
+                dt = time.time() - t0
+                return {"source": "gemini", "parsed": parsed, "elapsed": dt, "error": None}
+            except Exception as e:
+                return {"source": "gemini", "parsed": None, "elapsed": 0, "error": e}
+
+        def run_qwen():
+            try:
+                t0 = time.time()
+                raw = self._call_ollama_with_history(enriched_input)
+                parsed = self._parse_response(raw)
+                parsed = self._repair_unfulfilled_promise(user_input, enriched_input, parsed)
+                dt = time.time() - t0
+                return {"source": "qwen", "parsed": parsed, "elapsed": dt, "error": None}
+            except Exception as e:
+                return {"source": "qwen", "parsed": None, "elapsed": 0, "error": e}
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            fut_gemini = executor.submit(run_gemini)
+            fut_qwen = executor.submit(run_qwen)
+            futures = [fut_gemini, fut_qwen]
+
+            first_finished = None
+            try:
+                for fut in as_completed(futures, timeout=config.AGENT_TIMEOUT):
+                    res = fut.result()
+                    src = res["source"]
+                    results[src] = res
+
+                    if not first_finished and not res["error"]:
+                        first_finished = res
+                        # Instant local action: if local Qwen finishes first with a tool call, return immediately!
+                        if src == "qwen" and res["parsed"] and res["parsed"].get("action"):
+                            log.info(f"⚡ Fast local Qwen action in {res['elapsed']:.2f}s: {res['parsed'].get('action')}")
+                            res["parsed"]["model"] = f"qwen ({config.OLLAMA_MODEL} local fast-path)"
+                            return res["parsed"]
+            except Exception as e:
+                log.warning(f"Hybrid thread pool error: {e}")
+
+        gemini_res = results.get("gemini")
+        qwen_res = results.get("qwen")
+
+        # Seamless fallback handling if one model failed or hit quota:
+        if gemini_res and gemini_res["error"] and qwen_res and not qwen_res["error"]:
+            log.warning(f"⚠️ Gemini unavailable ({gemini_res['error']}). Local Qwen seamlessly handled request in {qwen_res['elapsed']:.2f}s!")
+            qwen_res["parsed"]["model"] = f"qwen ({config.OLLAMA_MODEL})"
+            return qwen_res["parsed"]
+
+        if qwen_res and qwen_res["error"] and gemini_res and not gemini_res["error"]:
+            log.warning(f"⚠️ Qwen unavailable ({qwen_res['error']}). Cloud Gemini handled request in {gemini_res['elapsed']:.2f}s!")
+            gemini_res["parsed"]["model"] = f"gemini ({config.GEMINI_MODEL})"
+            return gemini_res["parsed"]
+
+        # Both succeeded: prioritize actionable result, else fastest valid response
+        if gemini_res and not gemini_res["error"] and qwen_res and not qwen_res["error"]:
+            g_act = gemini_res["parsed"].get("action")
+            q_act = qwen_res["parsed"].get("action")
+            if q_act and not g_act:
+                log.info(f"🎯 Picked Qwen ({qwen_res['elapsed']:.2f}s) — emitted action {q_act}")
+                qwen_res["parsed"]["model"] = f"qwen ({config.OLLAMA_MODEL})"
+                return qwen_res["parsed"]
+            if g_act and not q_act:
+                log.info(f"🎯 Picked Gemini ({gemini_res['elapsed']:.2f}s) — emitted action {g_act}")
+                gemini_res["parsed"]["model"] = f"gemini ({config.GEMINI_MODEL})"
+                return gemini_res["parsed"]
+
+            if first_finished:
+                chosen = first_finished
+                src = chosen["source"]
+                log.info(f"⚡ Fastest response won: {src} ({chosen['elapsed']:.2f}s)")
+                chosen["parsed"]["model"] = f"{src} ({config.GEMINI_MODEL if src == 'gemini' else config.OLLAMA_MODEL})"
+                return chosen["parsed"]
+
+        # If both errored
+        err_msg = ""
+        if gemini_res and gemini_res["error"]:
+            err_msg += f"Gemini: {gemini_res['error']} "
+        if qwen_res and qwen_res["error"]:
+            err_msg += f"Qwen: {qwen_res['error']}"
+        raise RuntimeError(f"All hybrid models failed: {err_msg}")
+
     def _think_fast(self, user_input: str) -> dict:
         """Single LLM call → parse action → return. Fast, simple path."""
         # Build prompt with memory context
         enriched_input = self._enrich_with_memory(user_input)
+
+        if self.provider in ("hybrid", "dual"):
+            try:
+                result = self._think_fast_hybrid(user_input, enriched_input)
+                if not result.get("response") or not result["response"].strip():
+                    result["response"] = "I'm sorry, I couldn't process that properly. Could you try rephrasing?"
+                log.info(f"⚡ Fast path (hybrid): action={result.get('action')}")
+                return result
+            except Exception as e:
+                log.error(f"Hybrid fast think error: {e}")
+                return {"response": f"Sorry, I had trouble with that. ({str(e)[:100]})", "action": None, "params": None}
 
         try:
             raw = self._raw_llm_call_with_history(enriched_input)
@@ -706,28 +847,61 @@ RULES:
 
         return "My AI provider isn't responding — check your key or try again."
 
+    def _call_gemini_single(self, prompt: str) -> str:
+        import google.generativeai as genai
+        model = genai.GenerativeModel(
+            model_name=config.GEMINI_MODEL,
+            generation_config=genai.GenerationConfig(
+                temperature=0.2,
+                max_output_tokens=config.LLM_MAX_TOKENS,
+            ),
+        )
+        response = model.generate_content(prompt)
+        return response.text
+
+    def _call_ollama_single(self, prompt: str) -> str:
+        if self._ollama_client is None:
+            self._init_ollama()
+        response = self._ollama_client.chat(
+            model=config.OLLAMA_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.2},
+        )
+        return response["message"]["content"]
+
+    def _call_gemini_with_history(self, user_input: str) -> str:
+        if self._gemini_chat is None:
+            self._init_gemini()
+        response = self._gemini_chat.send_message(user_input)
+        return response.text
+
+    def _call_ollama_with_history(self, user_input: str) -> str:
+        if self._ollama_client is None:
+            self._init_ollama()
+        messages = [{"role": "system", "content": self._build_system_prompt()}]
+        messages.extend(self.conversation_history[-config.CONTEXT_WINDOW_SIZE * 2:])
+        messages.append({"role": "user", "content": user_input})
+        response = self._ollama_client.chat(
+            model=config.OLLAMA_MODEL,
+            messages=messages,
+            options={"temperature": config.LLM_TEMPERATURE},
+        )
+        return response["message"]["content"]
+
     def _raw_llm_call_single(self, prompt: str) -> str:
         """Single raw LLM call without retries."""
-        if self.provider == "gemini":
-            # Use a fresh chat for one-off planning calls
-            import google.generativeai as genai
-            model = genai.GenerativeModel(
-                model_name=config.GEMINI_MODEL,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.2,  # Low temp for planning
-                    max_output_tokens=config.LLM_MAX_TOKENS,
-                ),
-            )
-            response = model.generate_content(prompt)
-            return response.text
+        if self.provider in ("hybrid", "dual"):
+            try:
+                return self._call_gemini_single(prompt)
+            except Exception as e:
+                log.warning(f"⚠️ Hybrid single call: Gemini failed ({e}), falling back to local Qwen")
+                return self._call_ollama_single(prompt)
+
+        elif self.provider == "gemini":
+            return self._call_gemini_single(prompt)
 
         elif self.provider == "ollama":
-            response = self._client.chat(
-                model=config.OLLAMA_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                options={"temperature": 0.2},
-            )
-            return response["message"]["content"]
+            return self._call_ollama_single(prompt)
 
         elif self.provider == "openai":
             response = self._client.chat.completions.create(
@@ -801,20 +975,18 @@ RULES:
 
     def _raw_llm_call_with_history_single(self, user_input: str) -> str:
         """Single LLM call with history, no retries."""
-        if self.provider == "gemini":
-            response = self._chat.send_message(user_input)
-            return response.text
+        if self.provider in ("hybrid", "dual"):
+            try:
+                return self._call_gemini_with_history(user_input)
+            except Exception as e:
+                log.warning(f"⚠️ Hybrid history call: Gemini failed ({e}), falling back to local Qwen")
+                return self._call_ollama_with_history(user_input)
+
+        elif self.provider == "gemini":
+            return self._call_gemini_with_history(user_input)
 
         elif self.provider == "ollama":
-            messages = [{"role": "system", "content": self._build_system_prompt()}]
-            messages.extend(self.conversation_history[-config.CONTEXT_WINDOW_SIZE * 2:])
-            messages.append({"role": "user", "content": user_input})
-            response = self._client.chat(
-                model=config.OLLAMA_MODEL,
-                messages=messages,
-                options={"temperature": config.LLM_TEMPERATURE},
-            )
-            return response["message"]["content"]
+            return self._call_ollama_with_history(user_input)
 
         elif self.provider == "openai":
             messages = [{"role": "system", "content": self._build_system_prompt()}]
@@ -898,10 +1070,12 @@ RULES:
 
     def _parse_response(self, raw_response: str) -> dict:
         """Parse LLM response to extract action JSON from action block."""
-        result = {"response": raw_response, "action": None, "params": None}
+        # Strip <think>...</think> reasoning tags if emitted by Qwen or reasoning models
+        cleaned_raw = re.sub(r"<think>.*?</think>", "", raw_response, flags=re.DOTALL).strip()
+        result = {"response": cleaned_raw, "action": None, "params": None}
 
         action_pattern = r"```(?:action|json)?\s*\n(.*?)```"
-        match = re.search(action_pattern, raw_response, re.DOTALL)
+        match = re.search(action_pattern, cleaned_raw, re.DOTALL)
 
         if match:
             json_str = match.group(1).strip()
@@ -909,7 +1083,7 @@ RULES:
                 action_json = json.loads(json_str)
                 result["action"] = action_json.get("action")
                 result["params"] = action_json.get("params", {})
-                result["response"] = re.sub(action_pattern, "", raw_response, flags=re.DOTALL).strip()
+                result["response"] = re.sub(action_pattern, "", cleaned_raw, flags=re.DOTALL).strip()
             except json.JSONDecodeError as e:
                 log.warning(f"Failed to parse full action JSON, trying to extract first object: {e}")
                 start_idx = json_str.find('{')
@@ -925,7 +1099,7 @@ RULES:
                                     action_json = json.loads(json_str[start_idx:i+1])
                                     result["action"] = action_json.get("action")
                                     result["params"] = action_json.get("params", {})
-                                    result["response"] = re.sub(action_pattern, "", raw_response, flags=re.DOTALL).strip()
+                                    result["response"] = re.sub(action_pattern, "", cleaned_raw, flags=re.DOTALL).strip()
                                 except json.JSONDecodeError:
                                     pass
                                 break
@@ -935,7 +1109,10 @@ RULES:
     def clear_history(self):
         """Clear conversation history."""
         self.conversation_history.clear()
-        if self.provider == "gemini" and self._client:
+        if hasattr(self, "_gemini_client") and self._gemini_client:
+            self._gemini_chat = self._gemini_client.start_chat(history=[])
+            self._chat = self._gemini_chat
+        elif self.provider == "gemini" and self._client:
             self._chat = self._client.start_chat(history=[])
         log.info("🗑️ Conversation history cleared")
 

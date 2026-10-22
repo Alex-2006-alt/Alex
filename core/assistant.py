@@ -87,12 +87,19 @@ class Assistant:
         else:
             self.wake_detector = None
 
+        # Screen vision — global hotkey listener (background mode)
+        self._hotkey_listener = None
+        if config.SCREEN_VISION_ENABLED and input_mode == "voice":
+            self._init_hotkey_listener()
+
         log.info(f"✅ {config.ASSISTANT_NAME} is ready!")
         log.info(f"   🔧 Tools: {len(self._tool_registry)} registered")
         log.info(f"   💾 Memory: {self._memory.stats()['facts']} facts stored")
         log.info(f"   🗺️ Agent mode: {config.AGENT_MODE}")
         log.info(f"   🎧 Input mode: {self.input_mode}")
         log.info(f"   📋 Commands: {len(self.dispatcher.list_commands())} registered")
+        if config.SCREEN_VISION_ENABLED:
+            log.info(f"   👁️  Screen vision: enabled ({config.SCREEN_HOTKEY})")
 
     # ─── INITIALIZATION ───────────────────────────────────────────────────────
 
@@ -134,6 +141,19 @@ class Assistant:
             log.warning(f"TaskManager init failed: {e}")
             self._task_manager = None
             self._monitor = None
+
+    def _init_hotkey_listener(self):
+        """Start the global hotkey listener for screen vision."""
+        try:
+            from core.hotkey_listener import HotkeyListener
+            self._hotkey_listener = HotkeyListener(
+                speaker=self.speaker,
+                listener=self.listener,
+                assistant=self,
+            )
+            self._hotkey_listener.start()
+        except Exception as e:
+            log.warning(f"HotkeyListener init failed: {e}")
 
     def _on_monitor_alert(self, message: str):
         """Called by monitors when a threshold is exceeded."""
@@ -444,6 +464,37 @@ class Assistant:
         res = self.process_text_full(text, confirm_callback=confirm_callback)
         return res.get("response", "")
 
+    def process_vision_request(self, question: str, image_b64: str) -> str:
+        """
+        Answer a question about a screenshot.
+
+        This is called by HotkeyListener when the user presses Win+Shift+A
+        and asks a question.  We route through VisionBrain directly (not the
+        main LLM) since the conversational brain has no vision capability.
+
+        The answer is returned as a plain string — the caller (HotkeyListener)
+        is responsible for speaking it.
+        """
+        try:
+            from core.vision_brain import VisionBrain
+            vb = VisionBrain()
+            answer = vb.ask_about_image(image_b64, question)
+
+            # Optionally store Q&A in conversation history for continuity
+            if self._memory:
+                try:
+                    from memory.context import Context
+                    if hasattr(self, '_context') and self._context:
+                        self._context.add("user", f"[Screen vision] {question}")
+                        self._context.add("assistant", answer)
+                except Exception:
+                    pass
+
+            return answer
+        except Exception as e:
+            log.error(f"process_vision_request failed: {e}")
+            return f"Sorry, I had trouble reading the screen: {e}"
+
     def get_status(self) -> dict:
         """Get current status of all subsystems."""
         status = {
@@ -472,6 +523,9 @@ class Assistant:
 
         if self.wake_detector:
             self.wake_detector.stop()
+
+        if self._hotkey_listener:
+            self._hotkey_listener.stop()
 
         if self._memory:
             self._memory.close()
