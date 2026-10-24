@@ -19,6 +19,12 @@ import subprocess
 import argparse
 from pathlib import Path
 
+# Force utf-8 stdout so console emojis don't crash on Windows cp1252
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -121,7 +127,7 @@ def status_task_scheduler() -> bool:
 # ─── Registry Run key ─────────────────────────────────────────────────────────
 
 def install_registry() -> bool:
-    """Add Alex to HKCU\...\Run (no admin required)."""
+    r"""Add Alex to HKCU\...\Run (no admin required)."""
     try:
         import winreg
         key = winreg.OpenKey(

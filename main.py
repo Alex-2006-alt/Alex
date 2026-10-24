@@ -67,6 +67,12 @@ def parse_args():
         action="store_true",
         help="Run a quick startup greeting and exit",
     )
+    parser.add_argument(
+        "--tray", "--background",
+        dest="tray",
+        action="store_true",
+        help="Run Alex in the background tray (always active behind the screen)",
+    )
     return parser.parse_args()
 
 
@@ -272,6 +278,11 @@ def main():
 
     if args.server:
         run_server_mode(args.port)
+        return
+
+    if args.tray:
+        from core.tray_app import TrayApp
+        TrayApp().run()
         return
 
     # Normal voice mode
