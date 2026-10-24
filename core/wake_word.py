@@ -37,6 +37,7 @@ class WakeWordDetector:
         """
         Generate common misheard/alternative spellings of the wake word.
         Whisper sometimes transcribes "Hey Alex" differently.
+        Sorted by length descending so longer phrases match first.
         """
         variants = [wake_word]
 
@@ -51,9 +52,16 @@ class WakeWordDetector:
             f"okay {base_name}",
             f"hi {base_name}",
             f"hey, {base_name}",
+            "hey alexa",
+            "alexa",
+            "hey alix",
+            "alix",
+            "hey atlas",
+            "atlas",
         ])
 
-        return [v.lower().strip() for v in variants]
+        unique = list({v.lower().strip() for v in variants if v.strip()})
+        return sorted(unique, key=len, reverse=True)
 
     def load_model(self):
         """Load a tiny Whisper model for fast wake word detection."""
@@ -78,6 +86,10 @@ class WakeWordDetector:
             True if wake word was detected, False otherwise
         """
         self.load_model()
+        self.last_prompt = None
+
+        if not hasattr(self, "device"):
+            self.device = config.AUDIO_INPUT_DEVICE
 
         try:
             # Record a short audio chunk
@@ -85,21 +97,27 @@ class WakeWordDetector:
             audio = sd.rec(
                 num_samples,
                 samplerate=self.sample_rate,
-                channels=1,
+                channels=config.CHANNELS,
                 dtype="float32",
+                device=self.device,
             )
             sd.wait()  # Wait for recording to finish
 
             audio_flat = audio.flatten()
-
-            # Check if there's any meaningful audio (skip silence)
-            rms = np.sqrt(np.mean(audio_flat**2))
-            if rms < config.SILENCE_THRESHOLD:
+            if len(audio_flat) == 0:
                 return False
+
+            # Check if there's any meaningful audio (adaptive sensitive threshold)
+            max_val = float(np.max(np.abs(audio_flat)))
+            if max_val < 0.00003:
+                return False
+
+            # Normalize audio gain so Whisper receives a clear, full-scale signal
+            normalized_audio = (audio_flat / max_val * 0.5).astype(np.float32)
 
             # Transcribe the short chunk with tiny model
             result = self.model.transcribe(
-                audio_flat,
+                normalized_audio,
                 fp16=False,
                 language=config.WHISPER_LANGUAGE or "en",
             )
@@ -108,22 +126,41 @@ class WakeWordDetector:
             if not text:
                 return False
 
+            log.info(f"👂 Heard: \"{text}\" (peak={max_val:.5f})")
+
             # Check if any wake word variant was said
+            clean_text = text.replace(",", "").replace(".", "").replace("!", "").strip()
             for variant in self.wake_variants:
-                if variant in text:
+                if variant in text or variant in clean_text:
                     log.info(f"🔔 Wake word detected! Heard: \"{text}\"")
+                    # Extract any trailing prompt spoken in the same breath
+                    idx = text.find(variant)
+                    if idx == -1:
+                        idx = clean_text.find(variant)
+                    trailing = text[idx + len(variant):].strip().lstrip(",.!? ").strip()
+                    if len(trailing) >= 2:
+                        self.last_prompt = trailing
+                        log.info(f"⚡ Instant prompt detected with wake word: \"{trailing}\"")
                     return True
 
             return False
 
         except Exception as e:
+            if self.device is not None:
+                log.warning(f"Audio device {self.device} failed ({e}), falling back to default device")
+                self.device = None
+                return False
             log.error(f"Wake word detection error: {e}")
             return False
 
-    def wait_for_wake_word(self) -> None:
+    def wait_for_wake_word(self) -> str | None:
         """
         Block until the wake word is detected.
         Continuously listens in short chunks.
+
+        Returns:
+            Trailing prompt string if user asked question in the same utterance,
+            or None if only the wake word was spoken.
         """
         self.load_model()
         log.info(f"👂 Waiting for wake word: \"{self.wake_word}\"")
@@ -132,9 +169,10 @@ class WakeWordDetector:
         self._active = True
         while self._active:
             if self.listen_for_wake_word():
-                return
+                return self.last_prompt
             # Small pause between chunks to prevent CPU overload
-            time.sleep(0.1)
+            time.sleep(0.05)
+        return None
 
     def stop(self):
         """Stop listening for wake word."""

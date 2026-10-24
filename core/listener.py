@@ -80,6 +80,11 @@ class Listener:
             if audio_data.dtype != np.float32:
                 audio_data = audio_data.astype(np.float32)
 
+            # Boost gain if audio is low-amplitude
+            max_val = float(np.max(np.abs(audio_data))) if len(audio_data) > 0 else 0.0
+            if max_val > 0.00003:
+                audio_data = (audio_data / max_val * 0.5).astype(np.float32)
+
             # Run transcription
             options = {
                 "fp16": False,  # Use fp32 for CPU compatibility

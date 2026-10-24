@@ -7,6 +7,9 @@ REM    alex --text              text-only mode in this terminal
 REM    alex --server --port 8080
 REM    alex --test              run diagnostics
 REM
+REM    alex --background        run in background tray (always active behind screen)
+REM    alex --tray              same as --background
+REM
 REM  %~dp0 is this file's own folder, so the launcher works from any directory
 REM  and keeps working if you move the project.
 REM
@@ -16,6 +19,18 @@ REM ---------------------------------------------------------------------------
 
 setlocal
 cd /d "%~dp0"
+
+if "%~1"=="--background" (
+    echo Starting ALEX in the background behind your screen...
+    start "" pythonw.exe alex_service.pyw
+    exit /b 0
+)
+
+if "%~1"=="--tray" (
+    echo Starting ALEX in the background tray...
+    start "" pythonw.exe alex_service.pyw
+    exit /b 0
+)
 
 if "%~1"=="" (
     python main.py --server

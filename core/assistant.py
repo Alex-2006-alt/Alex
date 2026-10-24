@@ -229,12 +229,18 @@ class Assistant:
         """Single interaction cycle: listen → think → act → speak."""
 
         # Step 1: Wait for wake word
+        user_input = None
         if self.use_wake_word and self.wake_detector:
-            self.wake_detector.wait_for_wake_word()
-            self.speaker.say("Yes?", block=True)
+            wake_prompt = self.wake_detector.wait_for_wake_word()
+            if wake_prompt:
+                log.info(f"⚡ Instant query received with wake word: \"{wake_prompt}\"")
+                user_input = wake_prompt
+            else:
+                self.speaker.say("Yes?", block=True)
 
-        # Step 2: Listen (via adapter)
-        user_input = self.listen()
+        # Step 2: Listen (via adapter) if no query was provided with the wake word
+        if not user_input:
+            user_input = self.listen()
         if not user_input:
             if not self.use_wake_word:
                 time.sleep(0.5)

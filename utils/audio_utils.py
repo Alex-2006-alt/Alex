@@ -63,59 +63,64 @@ def record_audio_until_silence(
         log.warning(f"Ambient calibration failed, using configured threshold: {e}")
         effective_threshold = silence_threshold
 
-    # ── Record full max_duration in one shot ───────────────────────────
+    # ── Record in real-time slices with early breakout on silence ───────
     log.info("🎤 Listening... (speak now)")
-    total_samples = int(max_duration * sample_rate)
+    slice_duration = 0.25  # 250ms chunks for low-latency detection
+    slice_samples = int(slice_duration * sample_rate)
+    silence_slices_needed = max(2, int(silence_duration / slice_duration))
+    max_slices = int(max_duration / slice_duration)
+    initial_silence_limit = int(6.0 / slice_duration)  # 6 seconds to start speaking
 
-    try:
-        audio = sd.rec(
-            total_samples,
-            samplerate=sample_rate,
-            channels=config.CHANNELS,
-            dtype="float32",
-            device=device,
-        )
-        sd.wait()
-    except Exception as e:
-        log.error(f"Recording error: {e}")
-        return None
-
-    audio = audio.flatten()
-
-    # ── Analyze chunks to find speech boundaries ──────────────────────
-    silence_chunks_needed = int(silence_duration * sample_rate / block_size)
-    total_chunks = len(audio) // block_size
-
+    recorded_slices: list[np.ndarray] = []
+    pre_speech_slices: list[np.ndarray] = []
     has_speech = False
-    speech_start = 0
-    speech_end = len(audio)
-    silent_chunks = 0
+    silent_slices = 0
 
-    for i in range(total_chunks):
-        chunk = audio[i * block_size : (i + 1) * block_size]
-        rms = float(np.sqrt(np.mean(chunk ** 2)))
+    for slice_idx in range(max_slices):
+        try:
+            chunk = sd.rec(
+                slice_samples,
+                samplerate=sample_rate,
+                channels=config.CHANNELS,
+                dtype="float32",
+                device=device,
+            )
+            sd.wait()
+        except Exception as e:
+            log.error(f"Recording error: {e}")
+            break
+
+        chunk_flat = chunk.flatten()
+        rms = float(np.sqrt(np.mean(chunk_flat ** 2)))
 
         if rms > effective_threshold:
             if not has_speech:
-                # Mark where speech starts (back up one chunk for safety)
-                speech_start = max(0, (i - 1) * block_size)
+                # Include up to 2 pre-speech chunks (0.5s) to avoid clipping first syllable
+                recorded_slices.extend(pre_speech_slices)
             has_speech = True
-            silent_chunks = 0
-            speech_end = (i + 1) * block_size
+            silent_slices = 0
+            recorded_slices.append(chunk_flat)
         else:
-            silent_chunks += 1
+            if has_speech:
+                silent_slices += 1
+                recorded_slices.append(chunk_flat)
+                if silent_slices >= silence_slices_needed:
+                    log.info("🔇 Silence detected, stopping recording early")
+                    break
+            else:
+                pre_speech_slices.append(chunk_flat)
+                if len(pre_speech_slices) > 2:
+                    pre_speech_slices.pop(0)
+                # If no speech started within initial silence limit, abort early
+                if slice_idx >= initial_silence_limit:
+                    log.debug("No speech started within initial timeout")
+                    break
 
-        # Stop scanning after enough silence post-speech
-        if has_speech and silent_chunks >= silence_chunks_needed:
-            log.info("🔇 Silence detected, stopping")
-            break
-
-    if not has_speech:
+    if not has_speech or not recorded_slices:
         log.debug("No speech detected in recording")
         return None
 
-    # Trim to just the speech portion (with a small tail)
-    audio_data = audio[speech_start:speech_end]
+    audio_data = np.concatenate(recorded_slices)
     duration = len(audio_data) / sample_rate
     log.info(f"📼 Recorded {duration:.1f}s of audio")
 
