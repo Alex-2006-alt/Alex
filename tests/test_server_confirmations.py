@@ -18,6 +18,7 @@ import server
 def client():
     server.app.config["TESTING"] = True
     with server.app.test_client() as c:
+        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {server.API_TOKEN}"
         yield c
     # Never leak a parked confirmation into the next test
     with server._pending_lock:

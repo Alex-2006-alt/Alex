@@ -16,15 +16,64 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from flask import Flask, request, jsonify, send_from_directory
+import os
+import secrets
+import hmac
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 
 from utils.logger import log
 import config
 
-# ── Flask App ─────────────────────────────────────────────────────────────────
+# ── API Authentication Token ──────────────────────────────────────────────────
+# Secure random token generated per server run (or loaded from environment).
+# The token is never logged, printed, or exposed in URLs.
+API_TOKEN = os.getenv("ALEX_API_TOKEN") or secrets.token_hex(32)
+
+# ── Flask App & Strict Local CORS ─────────────────────────────────────────────
 app = Flask(__name__, static_folder="gui", static_url_path="/")
-CORS(app)
+CORS(
+    app,
+    resources={r"/api/*": {"origins": [
+        r"^https?://127\.0\.0\.1(:\d+)?$",
+        r"^https?://localhost(:\d+)?$"
+    ]}},
+    supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization", "X-Alex-Token"],
+    methods=["GET", "POST", "DELETE", "OPTIONS"],
+)
+
+
+@app.before_request
+def _authenticate_request():
+    """Enforce authentication and local origin policy on all /api/* endpoints."""
+    if not request.path.startswith("/api/"):
+        return None
+
+    # Allow CORS preflight OPTIONS requests to proceed
+    if request.method == "OPTIONS":
+        return None
+
+    # Verify Origin header if present (block cross-origin malicious sites)
+    origin = request.headers.get("Origin")
+    if origin:
+        parsed_origin = urlparse(origin)
+        if parsed_origin.hostname not in ("127.0.0.1", "localhost"):
+            log.warning(f"Rejected request from unauthorized Origin: {origin}")
+            return jsonify({"error": "Forbidden: unauthorized origin"}), 403
+
+    # Extract token from Authorization header or X-Alex-Token header
+    token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif "X-Alex-Token" in request.headers:
+        token = request.headers.get("X-Alex-Token", "").strip()
+
+    if not token or not hmac.compare_digest(token, API_TOKEN):
+        log.warning(f"Unauthorized API request: {request.method} {request.path}")
+        return jsonify({"error": "Unauthorized"}), 401
 
 # ── Lazy-loaded assistant ─────────────────────────────────────────────────────
 _assistant = None
@@ -182,7 +231,18 @@ def _get_system_stats():
 
 @app.route("/")
 def index():
-    return send_from_directory("gui", "index.html")
+    html_path = Path(__file__).parent / "gui" / "index.html"
+    try:
+        html_content = html_path.read_text(encoding="utf-8")
+        token_meta = f'<meta name="alex-token" content="{API_TOKEN}">'
+        if "</head>" in html_content:
+            html_content = html_content.replace("</head>", f"    {token_meta}\n</head>", 1)
+        response = Response(html_content, mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, private"
+        return response
+    except Exception as e:
+        log.error(f"Error serving index.html: {e}")
+        return send_from_directory("gui", "index.html")
 
 
 @app.route("/api/status")
@@ -603,8 +663,16 @@ def main():
         except Exception as e:
             log.error(f"Failed to pre-load assistant: {e}")
 
+    # Rule 9: Keep the bind address strictly loopback, never allow 0.0.0.0 or debug mode
+    if args.host not in ("127.0.0.1", "localhost"):
+        log.error(f"Refusing to bind to non-loopback host '{args.host}'. Forcing bind to 127.0.0.1.")
+        args.host = "127.0.0.1"
+
+    if args.debug:
+        log.warning("Flask debug mode is disabled for security hardening.")
+
     threading.Thread(target=preload, daemon=True).start()
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    app.run(host="127.0.0.1", port=args.port, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
