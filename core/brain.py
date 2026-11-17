@@ -376,27 +376,30 @@ RULES:
                 return {"source": "qwen", "parsed": None, "elapsed": 0, "error": e}
 
         results = {}
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            fut_gemini = executor.submit(run_gemini)
-            fut_qwen = executor.submit(run_qwen)
-            futures = [fut_gemini, fut_qwen]
+        executor = ThreadPoolExecutor(max_workers=2)
+        fut_gemini = executor.submit(run_gemini)
+        fut_qwen = executor.submit(run_qwen)
+        futures = [fut_gemini, fut_qwen]
 
-            first_finished = None
-            try:
-                for fut in as_completed(futures, timeout=config.AGENT_TIMEOUT):
-                    res = fut.result()
-                    src = res["source"]
-                    results[src] = res
+        first_finished = None
+        try:
+            for fut in as_completed(futures, timeout=config.AGENT_TIMEOUT):
+                res = fut.result()
+                src = res["source"]
+                results[src] = res
 
-                    if not first_finished and not res["error"]:
-                        first_finished = res
-                        # Instant local action: if local Qwen finishes first with a tool call, return immediately!
-                        if src == "qwen" and res["parsed"] and res["parsed"].get("action"):
-                            log.info(f"⚡ Fast local Qwen action in {res['elapsed']:.2f}s: {res['parsed'].get('action')}")
-                            res["parsed"]["model"] = f"qwen ({config.OLLAMA_MODEL} local fast-path)"
-                            return res["parsed"]
-            except Exception as e:
-                log.warning(f"Hybrid thread pool error: {e}")
+                if not first_finished and not res["error"]:
+                    first_finished = res
+                    # Instant local action: if local Qwen finishes first with a tool call, return immediately!
+                    if src == "qwen" and res["parsed"] and res["parsed"].get("action"):
+                        log.info(f"⚡ Fast local Qwen action in {res['elapsed']:.2f}s: {res['parsed'].get('action')}")
+                        res["parsed"]["model"] = f"qwen ({config.OLLAMA_MODEL} local fast-path)"
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        return res["parsed"]
+        except Exception as e:
+            log.warning(f"Hybrid thread pool error: {e}")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         gemini_res = results.get("gemini")
         qwen_res = results.get("qwen")

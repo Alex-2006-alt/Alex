@@ -310,3 +310,68 @@ class TestCurrentPlanLifecycle:
         brain._current_plan = Plan(goal="g", steps=[Step(id=1, action="a", params={})])
         assert brain.get_current_plan()["goal"] == "g"
 
+
+
+class TestThinkFastHybrid:
+    def test_fast_qwen_action_does_not_block_on_slow_gemini(self, brain, monkeypatch):
+        import time
+
+        def slow_gemini(user_input):
+            time.sleep(2.0)
+            return 'Gemini response\n```action\n{"action": "web_search", "params": {}}\n```'
+
+        def fast_qwen(user_input):
+            time.sleep(0.05)
+            return 'Opening YouTube\n```action\n{"action": "web_open", "params": {"url": "https://youtube.com"}}\n```'
+
+        monkeypatch.setattr(brain, "_call_gemini_with_history", slow_gemini)
+        monkeypatch.setattr(brain, "_call_ollama_with_history", fast_qwen)
+
+        t0 = time.time()
+        res = brain._think_fast_hybrid("open youtube", "open youtube")
+        elapsed = time.time() - t0
+
+        assert res["action"] == "web_open"
+        assert "local fast-path" in res.get("model", "")
+        assert elapsed < 1.0, f"Expected return under 1.0s, but took {elapsed:.2f}s (blocked on slow Gemini!)"
+
+    def test_gemini_fallback_when_qwen_fails(self, brain, monkeypatch):
+        def good_gemini(user_input):
+            return "Hello from Gemini"
+
+        def fail_qwen(user_input):
+            raise ConnectionError("Ollama offline")
+
+        monkeypatch.setattr(brain, "_call_gemini_with_history", good_gemini)
+        monkeypatch.setattr(brain, "_call_ollama_with_history", fail_qwen)
+
+        res = brain._think_fast_hybrid("hello", "hello")
+        assert res["response"] == "Hello from Gemini"
+        assert "gemini" in res.get("model", "").lower()
+
+    def test_qwen_fallback_when_gemini_fails(self, brain, monkeypatch):
+        def fail_gemini(user_input):
+            raise RuntimeError("Gemini quota exceeded")
+
+        def good_qwen(user_input):
+            return "Hello from Qwen"
+
+        monkeypatch.setattr(brain, "_call_gemini_with_history", fail_gemini)
+        monkeypatch.setattr(brain, "_call_ollama_with_history", good_qwen)
+
+        res = brain._think_fast_hybrid("hello", "hello")
+        assert res["response"] == "Hello from Qwen"
+        assert "qwen" in res.get("model", "").lower()
+
+    def test_both_fail_raises_runtime_error(self, brain, monkeypatch):
+        def fail_g(u):
+            raise RuntimeError("G fail")
+
+        def fail_q(u):
+            raise RuntimeError("Q fail")
+
+        monkeypatch.setattr(brain, "_call_gemini_with_history", fail_g)
+        monkeypatch.setattr(brain, "_call_ollama_with_history", fail_q)
+
+        with pytest.raises(RuntimeError, match="All hybrid models failed"):
+            brain._think_fast_hybrid("hello", "hello")
