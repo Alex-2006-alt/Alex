@@ -109,11 +109,22 @@ function markBackendOnline() {
     fetchRealStats();
 }
 
+function getAuthToken() {
+    const meta = document.querySelector('meta[name="alex-token"]');
+    return meta ? meta.getAttribute('content') : (window.__ALEX_TOKEN__ || '');
+}
+
 async function apiCall(endpoint, method = 'GET', body = null) {
     try {
+        const token = getAuthToken();
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+            headers['X-Alex-Token'] = token;
+        }
         const opts = {
             method,
-            headers: { 'Content-Type': 'application/json' },
+            headers,
         };
         if (body) opts.body = JSON.stringify(body);
 
@@ -914,8 +925,16 @@ async function stopWhisperListening() {
         const formData = new FormData();
         formData.append('file', wavBlob, 'recording.wav');
 
+        const token = getAuthToken();
+        const transcribeHeaders = {};
+        if (token) {
+            transcribeHeaders['Authorization'] = `Bearer ${token}`;
+            transcribeHeaders['X-Alex-Token'] = token;
+        }
+
         const response = await fetch('/api/transcribe', {
             method: 'POST',
+            headers: transcribeHeaders,
             body: formData
         });
 
@@ -957,7 +976,14 @@ async function fallbackServerWhisperListen() {
     addMessage('SYSTEM', 'Listening on host PC microphone with Whisper...', 'system-msg');
 
     try {
-        const res = await fetch('/api/voice/listen', { method: 'POST' });
+        const token = getAuthToken();
+        const listenHeaders = {};
+        if (token) {
+            listenHeaders['Authorization'] = `Bearer ${token}`;
+            listenHeaders['X-Alex-Token'] = token;
+        }
+
+        const res = await fetch('/api/voice/listen', { method: 'POST', headers: listenHeaders });
         const data = await res.json();
         const text = (data.text || '').trim();
         if (text) {

@@ -111,6 +111,7 @@ def stub(monkeypatch):
     monkeypatch.setattr(server, "_get_assistant", lambda: assistant)
     server.app.config["TESTING"] = True
     with server.app.test_client() as c:
+        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {server.API_TOKEN}"
         yield c, assistant
     with server._pending_lock:
         for entry in server._pending.values():
